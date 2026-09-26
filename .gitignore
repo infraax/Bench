@@ -4,3 +4,5 @@ sessions/*
 __pycache__/
 *.pyc
 .pytest_cache/
+supervisor/romhash
+supervisor/rom_hash.h

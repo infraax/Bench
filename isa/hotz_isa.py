@@ -34,8 +34,10 @@ class UCache(type):
         cls._c[k] = weakref.ref(o)
         return o
 
-# slots=True dropped: slotted dataclass has no __weakref__, and UCache needs one.
-@dataclass(eq=False)
+# slots is the constructor law: no extra attributes, no sixth field taped on at runtime.
+# a slotted dataclass has no __weakref__ by default and UCache needs one, so ask for it.
+# 3.11+ has weakref_slot=True; on 3.10 spell __slots__ by hand incl. "__weakref__".
+@dataclass(eq=False, slots=True, weakref_slot=True)
 class Step(metaclass=UCache):
     op: Op
     slot: str

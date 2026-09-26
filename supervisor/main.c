@@ -17,6 +17,18 @@
 #include <time.h>
 #include <unistd.h>
 #include "frame.h"
+#include "sha256.h"
+
+/* the crown, baked at build. make generates rom_hash.h from the live tests/rom;
+   a bare `cc` build without it runs UNPINNED (warns, does not enforce). */
+#if defined(__has_include)
+#  if __has_include("rom_hash.h")
+#    include "rom_hash.h"
+#  endif
+#endif
+#ifndef ROM_HASH
+#  define ROM_HASH "UNPINNED"
+#endif
 
 #define N_CEIL     8     /* foundation is Touch/Chunk. past this is SET_LOOP, Ring 0, not here. */
 #define MAX_OPS    64
@@ -222,8 +234,8 @@ static int t_exec(Session *s, void *arg) {
     argv[c] = NULL;
     uint64_t nb = 0;
     dprintf(g_log, "EXEC %s %s\n", in->slot, in->rest);
-    int rc = child_run(s->root, argv, NULL, 0, &nb, s->t_step_ms, g_log, g_log);
-    if (rc == -2) return ev(s, 1, "knife op=exec prog=%s timeout>%ums", in->slot, s->t_step_ms);
+    int rc = child_run(s->root, argv, JAIL_FULL, NULL, 0, &nb, s->t_tool_ms, g_log, g_log);
+    if (rc == -2) return ev(s, 1, "knife op=exec prog=%s timeout>%ums", in->slot, s->t_tool_ms);
     if (nb > s->bus.cap[SLOT_TTY]) return ev(s, 1, "leash op=exec out=%llu>%u", (unsigned long long)nb, s->bus.cap[SLOT_TTY]);
     return ev(s, rc != 0, "op=exec kind=none slot=%s rc=%d out=%llu dirty=0", in->slot, rc, (unsigned long long)nb);
 }
@@ -243,16 +255,16 @@ static int t_test(Session *s, void *arg) {
     char *argv[] = {"python3", "tools/test_runner.py", "--kind", in->slot, in->path, NULL};
     char out[256] = "";
     dprintf(g_log, "TEST %s %s\n", in->slot, in->path);
-    int rc = child_run(s->root, argv, out, sizeof out, NULL, s->t_step_ms, g_log, g_log);
+    int rc = child_run(s->root, argv, JAIL_NET_ONLY, out, sizeof out, NULL, s->t_tool_ms, g_log, g_log);
     out[strcspn(out, "\r\n")] = 0;
-    if (rc == -2) return ev(s, 1, "knife op=test path=%s timeout>%ums", in->path, s->t_step_ms);
+    if (rc == -2) return ev(s, 1, "knife op=test path=%s timeout>%ums", in->path, s->t_tool_ms);
     return ev(s, rc != 0, "op=test kind=%s slot=fs path=%s rc=%d result=\"%s\" dirty=0",
               !strcmp(in->slot, "PURE") ? "pure" : "scalar", in->path, rc, out);
 }
 
 static int t_wait(Session *s, void *arg) {
     Instr *in = arg;
-    if (in->ms > s->t_step_ms) return ev(s, 1, "op=wait ms=%u > T_step=%u", in->ms, s->t_step_ms);
+    if (in->ms > s->t_tool_ms) return ev(s, 1, "op=wait ms=%u > T_tool=%u", in->ms, s->t_tool_ms);
     struct timespec ts = {(time_t)(in->ms / 1000), (long)(in->ms % 1000) * 1000000L};
     nanosleep(&ts, NULL);
     return ev(s, 0, "op=wait kind=none ms=%u dirty=0", in->ms);
@@ -305,6 +317,30 @@ static int exists(const char *dir, const char *name) {
     return !path_join(p, sizeof p, dir, name) && stat(p, &st) == 0;
 }
 
+/* ---- ROM crown: refuse to boot on a changed image ---- */
+
+static int rom_ok(void) {
+    if (!strcmp(ROM_HASH, "UNPINNED")) {
+        fprintf(stderr, "warn: ROM not pinned (built without rom_hash.h); run `make` to crown it\n");
+        return 0;
+    }
+    const char *paths[] = {"tests/rom"};
+    char hex[65];
+    if (tree_hash(g_root, paths, 1, hex) != 0) {
+        fprintf(stderr, "boot: cannot hash tests/rom under %s\n", g_root);
+        return -1;
+    }
+    if (strcmp(hex, ROM_HASH) != 0) {
+        fprintf(stderr,
+                "boot: ROM image changed — refusing to run.\n"
+                "  embedded %s\n  on disk  %s\n"
+                "changing tests/rom is Ring 0: rebuild with `make` (a human key), not a live edit.\n",
+                ROM_HASH, hex);
+        return -1;
+    }
+    return 0;
+}
+
 /* ---- commands ---- */
 
 static int cmd_status(void) {
@@ -352,6 +388,7 @@ static void fmt_instr(const Instr *in, char *out, size_t n) {
 }
 
 static int cmd_run(int argc, char **argv) {
+    if (rom_ok() != 0) return 4;
     unsigned long n = N_MAX_DEFAULT;
     const char *script = NULL;
     for (int i = 0; i < argc; i++) {
@@ -415,7 +452,7 @@ static int cmd_run(int argc, char **argv) {
     sigaction(SIGINT, &sa, NULL);
 
     static Session s;
-    if (session_start(&s, g_root, dir, (uint32_t)n, (uint32_t)n, 0, 0)) {
+    if (session_start(&s, g_root, dir, (uint32_t)n, (uint32_t)n, 0, 0, 0)) {
         fprintf(stderr, "FAULT session start: snap s0 failed\n");
         return 1;
     }
@@ -468,10 +505,10 @@ static int cmd_kill(void) {
 }
 
 static int cmd_demo(void) {
+    if (rom_ok() != 0) return 4;
     char *argv[] = {"python3", "tools/test_runner.py", NULL};
     char out[256] = "";
-    setenv("BENCH_IN_DEMO", "1", 1);
-    int rc = child_run(g_root, argv, out, sizeof out, NULL, 300000, -1, -1);
+    int rc = child_run(g_root, argv, JAIL_NET_ONLY, out, sizeof out, NULL, 300000, -1, -1);
     char *nl = strchr(out, '\n');
     if (nl) *nl = 0;
     if (rc != 0) {

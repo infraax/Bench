@@ -6,17 +6,55 @@ if the draft phones a ghost, it is not ROM.
 the whole check is a walk of the syntax tree. no regex religion.
 each node returns a local "dirty" bit. we OR them on the way up.
 that is the backward of purity — same shape as micrograd, different object.
+
+honesty (Karpathy): this is the metal detector, NOT the cage.
+    is_ring0_source (here)  = an AST fold. stops an *accidental* `import openai`
+                              or `os.posix_spawn` in a test file. teaching + midwife.
+    is_sealed_exec (not here) = the OS. seccomp + landlock + a rom-image hash, in the
+                              C supervisor. that is the cage. see supervisor/sandbox.c
+                              and supervisor/rom_hash.h.
+A source-level banlist cannot bind a model that can write bytecode, reach through
+getattr on a built string, or ship a .pyc. Do not let this function impersonate the
+cage. The intern's real leash is that it never holds a general-purpose interpreter
+with your UID (Law 1: no ambient authority). This fold is the courtesy layer above it.
 """
 from __future__ import annotations
 import ast
 from pathlib import Path
 
 # names that mean "we left the snapshot". add here, don't invent a parser per vendor.
+# expanded past the antenna to the ambient-authority doors a model reaches for:
+# process spawning, native code, dynamic import, bytecode, a second interpreter.
 DIRTY_MODS = {
+    # antenna
     "openai", "anthropic", "httpx", "requests", "urllib", "socket",
-    "aiohttp", "http", "ssl", "subprocess", "pickle", "ctypes",
+    "aiohttp", "http", "ssl", "websockets", "grpc", "smtplib", "ftplib", "telnetlib",
+    # ambient authority: spawn, native, dynamic, bytecode, second interpreter
+    "subprocess", "multiprocessing", "ctypes", "cffi", "pty", "pexpect",
+    "importlib", "imp", "runpy", "marshal", "code", "codeop", "pickle", "shelve",
+    "mmap", "resource", "signal",
 }
-DIRTY_ATTR = {"urlopen", "OpenAI", "Client", "chat", "completions"}
+# attribute names that mean the same, reached through a module object (os.posix_spawn, ...).
+DIRTY_ATTR = {
+    # antenna / clients
+    "urlopen", "OpenAI", "Anthropic", "Client", "chat", "completions",
+    # os.* ambient authority
+    "system", "popen", "fork", "forkpty",
+    "exec", "execl", "execle", "execlp", "execlpe", "execv", "execve", "execvp", "execvpe",
+    "spawn", "spawnl", "spawnle", "spawnlp", "spawnlpe", "spawnv", "spawnve", "spawnvp", "spawnvpe",
+    "posix_spawn", "posix_spawnp",
+    # native / dynamic doors
+    "CDLL", "cdll", "WinDLL", "PyDLL", "LoadLibrary", "dlopen",
+    "import_module", "loads", "load_module", "interact",
+}
+# bare call names that are their own door regardless of module.
+DIRTY_CALL = {"eval", "exec", "compile", "__import__", "breakpoint", "globals", "vars"}
+# escape-chain dunders. NOT all dunders — __slots__/__dict__/__new__/__class__ are ordinary
+# introspection the ROM tests themselves use. these are the ones that walk out of the object graph.
+DIRTY_DUNDER = {
+    "__globals__", "__builtins__", "__code__", "__subclasses__", "__bases__", "__mro__",
+    "__loader__", "__spec__", "__reduce__", "__reduce_ex__", "__getattribute__", "__import__",
+}
 
 def _dirty_node(n: ast.AST) -> bool:
     if isinstance(n, ast.Import):
@@ -25,7 +63,15 @@ def _dirty_node(n: ast.AST) -> bool:
         return n.module.split(".")[0] in DIRTY_MODS
     if isinstance(n, ast.Attribute) and n.attr in DIRTY_ATTR:
         return True
-    if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id in {"eval", "exec", "__import__"}:
+    if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id in DIRTY_CALL:
+        return True
+    # getattr(x, "system") / __import__("socket") smuggle the name as a string literal.
+    if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == "getattr":
+        for a in n.args[1:2]:
+            if isinstance(a, ast.Constant) and isinstance(a.value, str) and a.value in (DIRTY_ATTR | DIRTY_CALL):
+                return True
+    # escape-chain dunder reach: ().__class__.__bases__, x.__globals__, obj.__builtins__.
+    if isinstance(n, ast.Attribute) and n.attr in DIRTY_DUNDER:
         return True
     return False
 
@@ -39,6 +85,10 @@ def is_ring0(src: str) -> bool:
         return False
     # local dirty on each node, reduce OR — intern this idea, don't decorate it
     return not any(_dirty_node(n) for n in ast.walk(tree))
+
+# explicit name so callers cannot mistake the metal detector for the cage.
+# is_sealed_exec is the C supervisor's job (seccomp/landlock/rom-hash), not python's.
+is_ring0_source = is_ring0
 
 def midwife(draft: str, dest: Path) -> Path:
     """intern writes proposed/. this function does not INSTALL_ROM."""

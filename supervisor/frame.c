@@ -1,3 +1,4 @@
+#define _GNU_SOURCE
 /* frame.c — one step is a frame. if it has no edges it is a chat.
  *
  * the intern does not live here. this thread owns time.
@@ -20,7 +21,10 @@
 #include <time.h>
 #include <unistd.h>
 #include "frame.h"
+#include "sha256.h"
 
+/* one clock. escape and slowness are both measured on the monotonic line;
+   a wall-clock warp (settimeofday) must not move a budget. */
 uint64_t nowns(void) {
     struct timespec t;
     clock_gettime(CLOCK_MONOTONIC, &t);
@@ -57,7 +61,7 @@ int write_atomic(const char *path, const char *text) {
     return rename(tmp, path);
 }
 
-int child_run(const char *root, char *const argv[], char *out, size_t outsz,
+int child_run(const char *root, char *const argv[], Jail jail, char *out, size_t outsz,
               uint64_t *nbytes, uint32_t timeout_ms, int log_fd, int err_fd) {
     int p[2];
     if (pipe(p) != 0) return -1;
@@ -70,7 +74,10 @@ int child_run(const char *root, char *const argv[], char *out, size_t outsz,
         close(p[0]); close(p[1]);
         if (err_fd >= 0) dup2(err_fd, 2);
         if (chdir(root) != 0) _exit(126);
-        execvp(argv[0], argv);
+        /* drop authority, fail closed: a child that cannot be jailed does not run. */
+        char **env = tool_env();
+        if (!env || sandbox_apply(jail) != 0) _exit(125);
+        execvpe(argv[0], argv, env);
         _exit(127);
     }
     close(p[1]);
@@ -165,12 +172,10 @@ int session_state(const Session *s, const char *status) {
    skipping the write because "nothing changed" is how hidden state is born.
    hash tree -> manifest -> atomic rename. */
 int snap(Session *s, const char *why) {
-    char hash[128] = "", tmp[1024], fin[1024], name[64], path[1100], man[1024];
-    char *hargv[] = {"python3", "tools/hash.py", "main", "hold", NULL};
-
-    if (child_run(s->root, hargv, hash, sizeof hash, NULL, s->t_step_ms, -1, -1) != 0) return -1;
-    hash[strcspn(hash, "\r\n")] = 0;
-    if (!hash[0]) return -1;
+    char hash[65] = "", tmp[1024], fin[1024], name[64], path[1100], man[1024];
+    /* hash the board in C. no interpreter boot inside the frame. */
+    const char *paths[] = {"main", "hold"};
+    if (tree_hash(s->root, paths, 2, hash) != 0) return -1;
 
     uint32_t k = s->k;
     snprintf(name, sizeof name, "snap-%u", k);
@@ -200,26 +205,25 @@ int snap(Session *s, const char *why) {
     return session_state(s, "run");
 }
 
-static int over_budget(const Session *s, uint64_t step_t0) {
-    uint64_t dt = (nowns() - step_t0) / 1000000ull;
-    uint64_t life = (nowns() - s->t0_ns) / 1000000ull;
-    return dt > s->t_step_ms || life > s->t_sess_ms;
-}
-
 /* one frame. intern op already parsed and checked upstairs.
+   two clocks: the tool child has already spent T_tool inside child_run (its own knife);
+   here we measure only the C thread's own work (snap + bookkeeping) against T_frame,
+   and the whole session against T_session. python boot is not the frame.
    return: 0 ok, 1 halt, -1 fault. */
 int frame(Session *s, Op op, Tool tool, void *arg, int k_due) {
-    uint64_t t0 = nowns();
+    uint64_t tool_t0 = nowns();
     int rc = 0;
 
-    /* do always */
+    /* do always. the tool is a child with its own timeout; that time is not the frame. */
     if (tool) rc = tool(s, arg);
+    uint64_t tool_ms = (nowns() - tool_t0) / 1000000ull;
+
+    uint64_t c0 = nowns();   /* the C thread's own work starts here */
     size_t l = strlen(s->ev);
-    snprintf(s->ev + l, sizeof s->ev - l, " budget_ms=%llu",
-             (unsigned long long)((nowns() - t0) / 1000000ull));
+    snprintf(s->ev + l, sizeof s->ev - l, " tool_ms=%llu", (unsigned long long)tool_ms);
     s->n++;
     if (snap(s, "step") != 0) {
-        /* no snapshot, no step */
+        /* no snapshot, no step. worst-case: n does not advance on a missed frame. */
         s->n--;
         s->bus.lamps = lamp_set(s->bus.lamps, LAMP_HOLD);
         return -1;
@@ -227,7 +231,8 @@ int frame(Session *s, Op op, Tool tool, void *arg, int k_due) {
 
     /* then inhibit */
     if (rc != 0) { s->bus.lamps = lamp_set(s->bus.lamps, LAMP_HOLD); return -1; }
-    if (over_budget(s, t0)) return -1;
+    if ((nowns() - c0) / 1000000ull > s->t_step_ms) return -1;              /* T_frame */
+    if ((nowns() - s->t0_ns) / 1000000ull > s->t_sess_ms) return -1;       /* T_session */
     if (s->n > s->n_max) return -1;
     if (k_due && snap(s, "K") != 0) return -1;
     (void)op;
@@ -235,12 +240,13 @@ int frame(Session *s, Op op, Tool tool, void *arg, int k_due) {
 }
 
 int session_start(Session *s, const char *root, const char *dir,
-                  uint32_t n, uint32_t k, uint32_t ts, uint32_t tS) {
+                  uint32_t n, uint32_t k, uint32_t ts, uint32_t tt, uint32_t tS) {
     memset(s, 0, sizeof *s);
     s->n_max = n ? n : N_MAX_DEFAULT;
     s->k_snap = k ? k : 1;
-    /* python startup plus a hash per snap does not fit carmack's 50ms. Touch-sized, still bounded. */
-    s->t_step_ms = ts ? ts : 5000;
+    /* snap is a C hash now, so the frame is tens of ms again, not five seconds. */
+    s->t_step_ms = ts ? ts : 200;    /* T_frame: C-owned work per step */
+    s->t_tool_ms = tt ? tt : 5000;   /* T_tool: a child's wall clock (python boot lives here) */
     s->t_sess_ms = tS ? tS : 60000;
     s->t0_ns = nowns();
     snprintf(s->root, sizeof s->root, "%s", root);
@@ -258,8 +264,9 @@ int session_start(Session *s, const char *root, const char *dir,
     /* frozen for the session. changing these is a new session. */
     char path[1024], text[256];
     if (mkdirs(dir) || path_join(path, sizeof path, dir, "SESSION")) return -1;
-    snprintf(text, sizeof text, "N_max=%u\nK=%u\nT_step_ms=%u\nT_session_ms=%u\nplug=0x%02x\n",
-             s->n_max, s->k_snap, s->t_step_ms, s->t_sess_ms, s->bus.plug);
+    snprintf(text, sizeof text,
+             "N_max=%u\nK=%u\nT_frame_ms=%u\nT_tool_ms=%u\nT_session_ms=%u\nplug=0x%02x\n",
+             s->n_max, s->k_snap, s->t_step_ms, s->t_tool_ms, s->t_sess_ms, s->bus.plug);
     if (write_atomic(path, text)) return -1;
     return snap(s, "s0");
 }
