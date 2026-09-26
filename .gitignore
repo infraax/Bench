@@ -1,0 +1,6 @@
+supervisor/bench
+sessions/*
+!sessions/.gitkeep
+__pycache__/
+*.pyc
+.pytest_cache/
