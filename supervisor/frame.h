@@ -6,6 +6,7 @@
 #include <stdint.h>
 #include "woz_bus.h"
 #include "sandbox.h"
+#include "arm.h"
 
 #ifndef N_MAX_DEFAULT
 #define N_MAX_DEFAULT 8
@@ -37,6 +38,7 @@ struct Session {
     uint64_t hold_base;      /* bytes in hold/ at session start; the quota counts growth past it */
     uint64_t hold_quota;     /* frozen at start, like N */
     Gate     gate;           /* KILL, owner token, helper: checked inside frame(), not beside it */
+    TokenId  tok;            /* the token that armed this run, pinned; any change disarms */
     Bus      bus;            /* woz bits — lamps live here, we do not keep a second copy */
     uint32_t k;              /* next snap index: snap-<k>/ */
     char     snap_id[24];

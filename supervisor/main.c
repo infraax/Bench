@@ -359,7 +359,9 @@ static int rom_ok(void) {
  * every frame (FRAME_OK). it can refuse; it cannot arm on its own. missing or silent
  * helper = fail closed, exit 6. */
 
-static int armed(void) { return owner_token_present(g_root, getenv("BENCH_TOKEN")); }
+static int arm_read(TokenId *t, char *why, size_t n) {
+    return token_read(g_root, getenv("BENCH_TOKEN"), t, why, n);
+}
 
 static Mailbox g_mb = {-1, -1, -1};
 
@@ -409,10 +411,14 @@ static void fmt_instr(const Instr *in, char *out, size_t n) {
     }
 }
 
-/* the frame's gate. KILL first (the owner's hand), then the owner's token. */
+/* the frame's gate. KILL first (the owner's hand), then the owner's token — the same file,
+   untouched since arm — then the helper. */
 static int run_gate(Session *s) {
     if (g_halt || exists(s->dir, "KILL")) return ev(s, 3, "halt=kill");
-    if (!armed()) return ev(s, 5, "halt=disarmed owner token gone");
+    TokenId now;
+    char tw[256];
+    if (!arm_read(&now, tw, sizeof tw)) return ev(s, 5, "halt=disarmed %.200s", tw);
+    if (!token_same(&now, &s->tok)) return ev(s, 5, "halt=disarmed owner token changed since arm");
     char n[16], why[128];
     snprintf(n, sizeof n, "%u", s->n + 1);
     int ok = mb_ask(&g_mb, "FRAME_OK", n, why, sizeof why);
@@ -436,9 +442,11 @@ static int parse_bytes(const char *p, uint64_t *out) {
 
 static int cmd_run(int argc, char **argv) {
     if (rom_ok() != 0) return 4;
-    if (!armed()) {
-        fprintf(stderr, "run: not armed — no owner token. set BENCH_TOKEN to a token file, "
-                        "or create %s under the world root. no frames ran.\n", TOKEN_REL);
+    TokenId tok;
+    char tw[256];
+    if (!arm_read(&tok, tw, sizeof tw)) {
+        fprintf(stderr, "run: not armed — %s. set BENCH_TOKEN to a token file, or create %s "
+                        "(yours, mode 0600 or 0644) under the world root. no frames ran.\n", tw, TOKEN_REL);
         return 5;
     }
     unsigned long n = N_MAX_DEFAULT;
@@ -536,6 +544,9 @@ static int cmd_run(int argc, char **argv) {
         return 1;
     }
     s.gate = run_gate;
+    s.tok = tok;
+    dprintf(g_log, "ARM token %s dev=%llu ino=%llu\n", tok.path,
+            (unsigned long long)tok.dev, (unsigned long long)tok.ino);
 
     int rc = 0;
     for (int i = 0; i < nops; i++) {

@@ -271,6 +271,26 @@ class TestBoard(unittest.TestCase):
         self.assertLess(int(w.state()["n"]), 6)
         self.assertNotIn("MAIN", out)
 
+    def test_replacing_the_token_stops_the_next_frame(self):
+        # a different file at the same path is not the token that armed this run.
+        w = addWorld(self)
+        proc = self.start(w, "WAIT 400\n" * 6)
+        w.disarm()
+        w.arm()
+        out, _ = proc.communicate(timeout=15)
+        self.assertEqual(proc.returncode, 5, out)
+        self.assertIn("changed since arm", out)
+        self.assertEqual(w.state()["status"], "disarmed")
+
+    def test_touching_the_token_stops_the_next_frame(self):
+        w = addWorld(self)
+        proc = self.start(w, "WAIT 400\n" * 6)
+        st = w.token.stat()
+        os.utime(w.token, ns=(st.st_atime_ns, st.st_mtime_ns + 1_000_000_000))
+        out, _ = proc.communicate(timeout=15)
+        self.assertEqual(proc.returncode, 5, out)
+        self.assertIn("changed since arm", out)
+
     def test_wait_evidence_says_what_was_slept(self):
         w = addWorld(self)
         self.assertEqual(w.bench("run", w.script("WAIT 20\n")).returncode, 0)
@@ -333,6 +353,37 @@ class TestArm(unittest.TestCase):
         w = addWorld(self)
         w.disarm()
         w.token.mkdir(parents=True)
+        self.assert_refused(w, w.bench("run", w.script("WAIT 1\n")))
+
+    def test_token_must_not_be_group_or_world_writable(self):
+        for mode in (0o666, 0o620, 0o602):
+            with self.subTest(mode=oct(mode)):
+                w = addWorld(self)
+                w.token.chmod(mode)
+                r = w.bench("run", w.script("WAIT 1\n"))
+                self.assert_refused(w, r)
+                self.assertIn("writable", r.stdout)
+
+    def test_token_may_be_owner_only(self):
+        w = addWorld(self)
+        w.token.chmod(0o600)
+        self.assertEqual(w.bench("run", w.script("WAIT 1\n")).returncode, 0)
+
+    def test_token_must_belong_to_the_runner(self):
+        if os.getuid() != 0:
+            self.skipTest("needs root to hand the token to another uid")
+        w = addWorld(self)
+        os.chown(w.token, 65534, 65534)
+        r = w.bench("run", w.script("WAIT 1\n"))
+        self.assert_refused(w, r)
+        self.assertIn("not owned", r.stdout)
+
+    def test_token_link_does_not_arm(self):
+        w = addWorld(self)
+        real = w.root / "real.key"
+        real.write_text("")
+        w.disarm()
+        w.token.symlink_to(real)
         self.assert_refused(w, w.bench("run", w.script("WAIT 1\n")))
 
     def test_old_token_path_does_not_arm(self):
