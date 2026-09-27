@@ -270,9 +270,16 @@ static int t_read(Session *s, void *arg) {
     int dfd = open_dir_beneath(rootfd, dir, 0);
     close(rootfd);
     if (dfd < 0) return ev(s, 1, "op=read slot=fs path=%s err=%s", in->path, strerror(errno));
-    int rf = openat(dfd, base, O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
+    /* O_NONBLOCK so a fifo/device planted in hold/ cannot block the frame clock; then require a
+       regular file — a fifo, socket or device is not board state and is refused, not read. */
+    int rf = openat(dfd, base, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC);
     close(dfd);
     if (rf < 0) return ev(s, 1, "op=read slot=fs path=%s err=%s", in->path, strerror(errno));
+    struct stat rst;
+    if (fstat(rf, &rst) != 0 || !S_ISREG(rst.st_mode)) {
+        close(rf);
+        return ev(s, 1, "op=read slot=fs path=%s err=not a regular file", in->path);
+    }
     size_t cap = s->bus.cap[SLOT_FS], n = 0;   /* buf is cap+1 wide: reading it full means over cap */
     ssize_t r;
     while (n < sizeof buf && (r = read(rf, buf + n, sizeof buf - n)) > 0) n += (size_t)r;
@@ -292,8 +299,9 @@ static int t_read(Session *s, void *arg) {
 static int write_beneath(int dfd, const char *base, const char *text, size_t n) {
     char tmp[300];
     if (snprintf(tmp, sizeof tmp, "%s.benchtmp", base) >= (int)sizeof tmp) return -1;
-    int fd = openat(dfd, tmp, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW | O_CLOEXEC, 0644);
-    if (fd < 0) return -1;
+    unlinkat(dfd, tmp, 0);                 /* clear a leftover temp (e.g. a crash, or a planted fifo) */
+    int fd = openat(dfd, tmp, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0644);
+    if (fd < 0) return -1;                 /* O_EXCL: the temp is a fresh regular file, never a device */
     int bad = n && write(fd, text, n) != (ssize_t)n;
     if (close(fd) != 0) bad = 1;
     if (bad) { unlinkat(dfd, tmp, 0); return -1; }

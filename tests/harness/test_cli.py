@@ -1524,6 +1524,15 @@ class TestCage(unittest.TestCase):
         self.assertFalse(out2.exists() and "TOP-SECRET" in out2.read_text(),
                          "a READ followed an intern symlink and leaked an outside file")
 
+    def test_reading_a_fifo_does_not_hang_the_frame(self):
+        # a tool can mkfifo in hold/ (landlock does not restrict fifo creation). READ must not
+        # block the supervisor on it: O_NONBLOCK + a regular-file check turn it into a fault.
+        w = addWorld(self)
+        w.tool("fifo.py", "import os\nos.mkfifo('hold/pipe')\n")
+        r = w.bench("run", w.script("EXEC tools/fifo.py\nREAD fs hold/pipe\n"), timeout=20)
+        self.assertNotEqual(r.returncode, 0, r.stdout)
+        self.assertIn("not a regular file", r.stdout)
+
     def test_nested_hold_write_and_read_still_work(self):
         w = addWorld(self)
         r = w.bench("run", w.script("WRITE fs hold/a/b/c.txt deep\nREAD fs hold/a/b/c.txt\n"))
