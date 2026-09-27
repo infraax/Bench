@@ -5,6 +5,7 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from isa.hotz_isa import OWNER_TOKEN  # noqa: E402
 from isa.karpathy_rom import install_rom, is_ring0, leash, midwife  # noqa: E402
 
 PURE = "def add(a, b):\n    return a + b\n\nassert add(2, 2) == 4\n"
@@ -17,6 +18,11 @@ DIRTY = [
     "from urllib.request import urlopen\n",
     "from anthropic import Anthropic\n",
     "import http.client\n",
+    "import asyncio\n",
+    "import socketserver\n",
+    "from xmlrpc.client import ServerProxy\n",
+    "import imaplib\n",
+    "import webbrowser\n",
     "def f(c):\n    return c.chat.completions.create()\n",
     # spawn / ambient authority — the posix_spawn hole Claude walked through last time
     "import subprocess\n",
@@ -80,6 +86,43 @@ class TestPredicate(unittest.TestCase):
             p = midwife(PURE, d / "proposed" / "t.py")
             self.assertEqual(p.read_text(), PURE)
             self.assertEqual([x.name for x in d.iterdir()], ["proposed"])
+
+    def test_midwife_writes_proposed_only(self):
+        with tempfile.TemporaryDirectory() as d:
+            d = Path(d)
+            for dest in (d / OWNER_TOKEN, d / "main" / "x.py", d / "tests" / "rom" / "test_x.py",
+                         d / "proposed" / ".." / "main" / "x.py", d / "proposed"):
+                with self.subTest(dest=dest):
+                    with self.assertRaises(RuntimeError):
+                        midwife(PURE, dest)
+                    self.assertFalse(dest.is_file())
+            self.assertFalse((d / OWNER_TOKEN).exists())
+
+    def test_install_rom_refuses_to_replace(self):
+        with tempfile.TemporaryDirectory() as d:
+            d = Path(d)
+            rom = d / "rom"
+            rom.mkdir()
+            (rom / "test_add.py").write_text("# the crowned one\n")
+            draft = midwife(PURE, d / "proposed" / "test_add.py")
+            with self.assertRaises(RuntimeError):
+                install_rom(draft, rom)
+            self.assertEqual((rom / "test_add.py").read_text(), "# the crowned one\n")
+
+    def test_install_rom_takes_test_files_from_proposed(self):
+        with tempfile.TemporaryDirectory() as d:
+            d = Path(d)
+            rom = d / "rom"
+            rom.mkdir()
+            not_test = midwife(PURE, d / "proposed" / "helper.py")
+            loose = d / "main" / "test_loose.py"
+            loose.parent.mkdir()
+            loose.write_text(PURE)
+            for draft in (not_test, loose):
+                with self.subTest(draft=draft.name):
+                    with self.assertRaises(RuntimeError):
+                        install_rom(draft, rom)
+            self.assertEqual(list(rom.iterdir()), [])
 
     def test_leash(self):
         self.assertTrue(leash(10, 10))

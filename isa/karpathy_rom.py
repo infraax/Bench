@@ -29,6 +29,7 @@ DIRTY_MODS = {
     # antenna
     "openai", "anthropic", "httpx", "requests", "urllib", "socket",
     "aiohttp", "http", "ssl", "websockets", "grpc", "smtplib", "ftplib", "telnetlib",
+    "asyncio", "socketserver", "xmlrpc", "poplib", "imaplib", "nntplib", "webbrowser",
     # ambient authority: spawn, native, dynamic, bytecode, second interpreter
     "subprocess", "multiprocessing", "ctypes", "cffi", "pty", "pexpect",
     "importlib", "imp", "runpy", "marshal", "code", "codeop", "pickle", "shelve",
@@ -90,18 +91,32 @@ def is_ring0(src: str) -> bool:
 # is_sealed_exec is the C supervisor's job (seccomp/landlock/rom-hash), not python's.
 is_ring0_source = is_ring0
 
+def _in_proposed(p: Path) -> bool:
+    # a draft lives under some proposed/ dir, and never climbs back out of it.
+    return "proposed" in p.parts[:-1] and ".." not in p.parts
+
 def midwife(draft: str, dest: Path) -> Path:
-    """intern writes proposed/. this function does not INSTALL_ROM."""
+    """intern writes proposed/, and only there. this function does not INSTALL_ROM."""
     dest = Path(dest)
+    if not _in_proposed(dest):
+        raise RuntimeError(f"midwife writes under proposed/ only, not {dest}")
     dest.parent.mkdir(parents=True, exist_ok=True)
     dest.write_text(draft)
     return dest
 
 def install_rom(draft: Path, rom_dir: Path) -> Path:
+    """proposed/test_*.py -> rom_dir, if clean and new. replacing a ROM file is not an install."""
+    draft = Path(draft)
+    if not _in_proposed(draft):
+        raise RuntimeError(f"install takes a draft from proposed/, not {draft}")
+    if not (draft.name.startswith("test_") and draft.suffix == ".py"):
+        raise RuntimeError(f"ROM holds test_*.py only (the runner loads nothing else): {draft.name}")
     src = draft.read_text()
     if not is_ring0(src):
         raise RuntimeError("wall: draft calls a ghost — stay in proposed/")
     out = Path(rom_dir) / draft.name
+    if out.exists():
+        raise RuntimeError(f"{out.name} is already ROM; replacing it is a human edit, not an install")
     out.write_text(src)
     return out
 
