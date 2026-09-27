@@ -45,7 +45,7 @@ Exit codes: 0 ok · 1 fault · 2 usage · 3 killed · 4 ROM changed · 5 not arm
 `status --line` example:
 
 ```
-1790488197-8946 ok n=5/8 snap=005-79f0fe07 lamps=HOLD,BLIND hold=+0/65536 files=+1/1024 armed=yes helper=v0 lock=free
+1790488197-8946 ok n=5/8 snap=005-79f0fe07 lamps=HOLD,BLIND hold=+0/65536 files=+1/256 armed=yes helper=v0 lock=free
 ```
 
 Status words: `run`, `ok`, `fault`, `halt`, `disarmed`, `restored`, and `crashed` (STATE says `run`
@@ -92,14 +92,15 @@ all in `frame()` (`supervisor/frame.c`).
 | Budget | Default | Per run | Fault |
 |---|---|---|---|
 | bytes | 64 KiB (`HOLD_QUOTA_BYTES`) | `--hold-quota` > `BENCH_HOLD_QUOTA` | `fault=hold-quota-bytes` |
-| entries (files + dirs) | 1024 (`HOLD_QUOTA_FILES`) | `--hold-files` > `BENCH_HOLD_FILES` | `fault=hold-quota-files` |
+| entries (files + dirs) | 256 (`HOLD_QUOTA_FILES`) | `--hold-files` > `BENCH_HOLD_FILES` | `fault=hold-quota-files` |
 
 Plain decimal, 0..2^32-1, else exit 2. Checked after every tool (`WRITE` and whatever an `EXEC`'d
 tool wrote). Over quota: the step is snapped without the board (`tree=skipped:over-quota`),
 status `fault`, exit 1. Both quotas and baselines are frozen in `SESSION`.
 
-Measured limit: creating ~1000 **new** files in one step costs ~350 ms to snap on the test disk,
-over `T_frame`. Unchanged files are cheap (see snapshots).
+The file default (256) is set against `T_frame`: creating ~1000 **new** files in one step costs
+~350 ms to snap on the test disk, over the 200 ms budget; 256 new files snap well inside it.
+Unchanged files are cheap (see snapshots).
 
 ## Snapshots
 

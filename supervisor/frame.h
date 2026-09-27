@@ -24,7 +24,7 @@
    tool make 65 536 one-byte files, and every snap would copy them all. same override pattern:
    --hold-files, BENCH_HOLD_FILES. */
 #ifndef HOLD_QUOTA_FILES
-#define HOLD_QUOTA_FILES 1024u
+#define HOLD_QUOTA_FILES 256u
 #endif
 
 /* same numbering as isa/hotz_isa.py Op. five. there is no sixth. */

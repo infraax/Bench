@@ -20,7 +20,7 @@ This file is concrete enough to implement from. The current tree ships three of 
 | Input | argv and files only. **stdin is `/dev/null`** | `child_run` |
 | Output | stdout+stderr → `sessions/<id>/out-<n>`, pinned by sha256 in the MANIFEST; > 4096 bytes is a `leash` fault | `t_exec`, tty cap |
 | Clock | `T_tool` = 5 s, then the child is killed | `child_run` |
-| Writes | only under `hold/`, `proposed/`, `tests/proposed/`; plus the hold quotas (64 KiB, 1024 entries per session) | landlock (EXEC), `frame()` |
+| Writes | only under `hold/`, `proposed/`, `tests/proposed/`; plus the hold quotas (64 KiB, 256 entries per session) | landlock (EXEC), `frame()` |
 | Radio | none: network syscalls return `EPERM` | seccomp |
 | One line of text from the intern | `WRITE fs <path> <one line>` writes that line + newline to a file in `hold/`/`proposed/` | `t_write` |
 

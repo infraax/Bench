@@ -30,7 +30,7 @@ or in `spec/BENCH_SPEC.md`. Nothing here adds a verb. The spec is unchanged.
 **Budgets**
 
 - N ≤ 8, `T_frame` 200 ms, `T_tool` 5 s, `T_session` 60 s, fs/tty caps 4 KiB,
-  hold growth 64 KiB and 1024 entries (per-run override), 20 sessions.
+  hold growth 64 KiB and 256 entries (per-run override), 20 sessions.
 
 **Tests**: bus (exhaustive C), 50 ROM, 99 harness — offline.
 
