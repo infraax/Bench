@@ -409,6 +409,44 @@ static int arm_read(TokenId *t, char *why, size_t n) {
 
 static Mailbox g_mb = {-1, -1, -1};
 
+/* ---- world lock: one run per world ----
+ * a POSIX write lock (fcntl) on sessions/LOCK, held for the life of `run`. fcntl rather than
+ * flock because F_GETLK names the holder's pid: `kill` signals a pid only when the lock proves
+ * that pid is the live run. the lock dies with the process, so a crashed run holds nothing.
+ * note: POSIX locks drop when the holder closes ANY fd on the file — run opens LOCK once. */
+
+static int lock_path(char *p, size_t n) { return sessions_path(p, n, "LOCK"); }
+
+/* take the lock. 0 held; -1 busy (holder in *pid, if known); -2 cannot open. */
+static int lock_take(int *fd_out, pid_t *pid) {
+    char p[1100];
+    *pid = 0;
+    if (lock_path(p, sizeof p)) return -2;
+    int fd = open(p, O_RDWR | O_CREAT | O_CLOEXEC, 0644);
+    if (fd < 0) return -2;
+    struct flock fl = {.l_type = F_WRLCK, .l_whence = SEEK_SET, .l_start = 0, .l_len = 0};
+    if (fcntl(fd, F_SETLK, &fl) != 0) {
+        struct flock q = {.l_type = F_WRLCK, .l_whence = SEEK_SET, .l_start = 0, .l_len = 0};
+        if (fcntl(fd, F_GETLK, &q) == 0 && q.l_type != F_UNLCK) *pid = q.l_pid;
+        close(fd);
+        return -1;
+    }
+    *fd_out = fd;   /* held until exit; never closed early */
+    return 0;
+}
+
+/* the pid of the live run holding the world, or 0 if nobody does. */
+static pid_t lock_holder(void) {
+    char p[1100];
+    if (lock_path(p, sizeof p)) return 0;
+    int fd = open(p, O_RDONLY | O_CLOEXEC);
+    if (fd < 0) return 0;
+    struct flock q = {.l_type = F_WRLCK, .l_whence = SEEK_SET, .l_start = 0, .l_len = 0};
+    pid_t pid = (fcntl(fd, F_GETLK, &q) == 0 && q.l_type != F_UNLCK) ? q.l_pid : 0;
+    close(fd);
+    return pid;
+}
+
 /* ---- commands ---- */
 
 static int cmd_status(void) {
@@ -429,6 +467,8 @@ static int cmd_status(void) {
     }
     char status[32], sn[32], n[16], N[16], K[16];
     kv(st, "status", status, sizeof status);
+    /* STATE says running, but nobody holds the world: the run died without writing an end. */
+    if (!strcmp(status, "run") && lock_holder() == 0) snprintf(status, sizeof status, "crashed");
     printf("session %s %s%s\n", id, status, exists(dir, "KILL") ? " (killed)" : "");
     printf("lamps   0x%02x", lamps);
     if (lamps & LAMP_MAIN) printf(" MAIN");
@@ -521,6 +561,17 @@ static int cmd_run(int argc, char **argv) {
         fprintf(stderr, "run: hold quota '%.64s' is not a byte count 0..%llu\n",
                 hq_src, (unsigned long long)HOLD_QUOTA_CEIL);
         return 2;
+    }
+
+    char lp[1100];
+    int lock_fd = -1;
+    pid_t holder;
+    if (sessions_path(lp, sizeof lp, NULL) || mkdirs(lp)) { fprintf(stderr, "run: no sessions dir\n"); return 1; }
+    int lk = lock_take(&lock_fd, &holder);
+    if (lk != 0) {
+        if (lk == -1) fprintf(stderr, "run: world busy — another run holds sessions/LOCK (pid %d). no frames ran.\n", (int)holder);
+        else fprintf(stderr, "run: cannot open sessions/LOCK. no frames ran.\n");
+        return 7;
     }
 
     FILE *f = (script && strcmp(script, "-")) ? fopen(script, "r") : stdin;
@@ -651,9 +702,14 @@ static int cmd_kill(void) {
     char dir[1024], id[128], path[1100], buf[1024], sn[32];
     if (current_dir(dir, sizeof dir, id, sizeof id)) { fprintf(stderr, "kill: no session\n"); return 1; }
     if (path_join(path, sizeof path, dir, "KILL") || write_atomic(path, "KILL\n")) return 1;
+    /* signal only the live run: the PID file must name the process holding the world lock.
+       a PID file left by a crash names nobody we may signal — that number may be reused. */
     if (path_join(path, sizeof path, dir, "PID") == 0 && read_small(path, buf, sizeof buf) == 0) {
-        pid_t pid = (pid_t)atoi(buf);
-        if (pid > 0 && kill(pid, 0) == 0) kill(pid, SIGTERM);
+        pid_t pid = (pid_t)atoi(buf), holder = lock_holder();
+        if (pid > 0 && holder == pid) kill(pid, SIGTERM);
+        else if (pid > 0)
+            printf("kill: pid %d does not hold the world lock (%s) — not signalled\n", (int)pid,
+                   holder ? "another run holds it" : "no live run");
     }
     sn[0] = 0;
     if (path_join(path, sizeof path, dir, "STATE") == 0 && read_small(path, buf, sizeof buf) == 0)

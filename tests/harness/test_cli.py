@@ -292,6 +292,36 @@ class TestBoard(unittest.TestCase):
         self.assertEqual(proc.returncode, 5, out)
         self.assertIn("changed since arm", out)
 
+    def test_second_run_in_the_same_world_is_refused(self):
+        w = addWorld(self)
+        first = self.start(w, "WAIT 300\n" * 4)
+        cur = (w.root / "sessions" / "CURRENT").read_text()
+        r = w.bench("run", w.script("WAIT 1\n", name="second.ops"))
+        self.assertEqual(r.returncode, 7, r.stdout)
+        self.assertIn("world busy", r.stdout)
+        self.assertIn(f"pid {first.pid}", r.stdout)
+        self.assertEqual((w.root / "sessions" / "CURRENT").read_text(), cur)   # untouched
+        out, _ = first.communicate(timeout=15)
+        self.assertEqual(first.returncode, 0, out)
+        self.assertEqual(w.bench("run", w.script("WAIT 1\n", name="third.ops")).returncode, 0)
+
+    def test_kill_never_signals_a_stale_pid(self):
+        # a run that died hard left PID behind and STATE at run. the pid now belongs to
+        # something else: kill must not touch it, and status must say crashed.
+        w = addWorld(self)
+        self.assertEqual(w.bench("run", w.script("WAIT 1\n")).returncode, 0)
+        other = subprocess.Popen(["sleep", "30"])
+        self.addCleanup(lambda: other.poll() is None and other.kill())
+        (w.session() / "PID").write_text(f"{other.pid}\n")
+        st = (w.session() / "STATE").read_text().replace("status=ok", "status=run")
+        (w.session() / "STATE").write_text(st)
+        r = w.bench("kill")
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertIn("not signalled", r.stdout)
+        time.sleep(0.2)
+        self.assertIsNone(other.poll(), "kill signalled a pid that is not the live run")
+        self.assertIn("crashed", w.bench("status").stdout)
+
     def test_wait_evidence_says_what_was_slept(self):
         w = addWorld(self)
         self.assertEqual(w.bench("run", w.script("WAIT 20\n")).returncode, 0)
