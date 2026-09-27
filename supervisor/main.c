@@ -341,6 +341,28 @@ static int rom_ok(void) {
     return 0;
 }
 
+/* ---- session arm: the owner's token, v0 ----
+ *
+ * run refuses to start unless the owner armed it: BENCH_TOKEN names an existing regular
+ * file, or sessions/current/token exists under the world root. presence only, no content.
+ * the token is checked here, in the supervisor, before any session dir, frame or lamp.
+ * tools cannot mint it: WRITE takes hold/ and proposed/ only, and tool children are
+ * write-limited to the same places. stands in for a later hardware key; nothing more. */
+
+#define TOKEN_REL "sessions/current/token"
+
+static int is_file(const char *p) {
+    struct stat st;
+    return stat(p, &st) == 0 && S_ISREG(st.st_mode);
+}
+
+static int armed(void) {
+    const char *env = getenv("BENCH_TOKEN");
+    if (env && *env && is_file(env)) return 1;
+    char p[1024];
+    return !path_join(p, sizeof p, g_root, TOKEN_REL) && is_file(p);
+}
+
 /* ---- commands ---- */
 
 static int cmd_status(void) {
@@ -389,6 +411,11 @@ static void fmt_instr(const Instr *in, char *out, size_t n) {
 
 static int cmd_run(int argc, char **argv) {
     if (rom_ok() != 0) return 4;
+    if (!armed()) {
+        fprintf(stderr, "run: not armed — no owner token. set BENCH_TOKEN to a token file, "
+                        "or create %s under the world root. no frames ran.\n", TOKEN_REL);
+        return 5;
+    }
     unsigned long n = N_MAX_DEFAULT;
     const char *script = NULL;
     for (int i = 0; i < argc; i++) {

@@ -20,7 +20,7 @@ from pathlib import Path
 IMAGE = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(IMAGE))
 sys.path.insert(0, str(IMAGE / "tools"))
-from isa.hotz_isa import Op  # noqa: E402
+from isa.hotz_isa import OWNER_TOKEN, Op  # noqa: E402
 from isa.karpathy_rom import is_ring0  # noqa: E402
 from peek import woz_bits  # noqa: E402
 
@@ -56,6 +56,17 @@ class World:
             (self.root / d).mkdir(parents=True, exist_ok=True)
         (self.root / "main" / "hello.txt").write_text("hello bench\n")
         self.env = dict(os.environ, BENCH_ROOT=str(self.root))
+        self.env.pop("BENCH_TOKEN", None)
+        self.token = self.root / OWNER_TOKEN
+        self.arm()
+
+    def arm(self):
+        # the owner (this harness, launched by make) arms the world before run.
+        self.token.parent.mkdir(parents=True, exist_ok=True)
+        self.token.write_text("")
+
+    def disarm(self):
+        self.token.unlink(missing_ok=True)
 
     def bench(self, *args, timeout=60):
         return subprocess.run([str(BENCH), *args], cwd=IMAGE, env=self.env,
@@ -214,6 +225,72 @@ class TestBoard(unittest.TestCase):
         sess = (w.session() / "SESSION").read_text()
         self.assertIn("T_frame_ms=", sess)
         self.assertIn("T_tool_ms=", sess)
+
+
+class TestArm(unittest.TestCase):
+    """run refuses to start without an owner token. no frames, no session, lamps dark."""
+
+    def assert_refused(self, w, r):
+        self.assertEqual(r.returncode, 5, r.stdout)
+        self.assertIn("not armed", r.stdout)
+        self.assertNotIn("frame ", r.stdout)
+        self.assertFalse((w.root / "sessions" / "CURRENT").exists())
+        st = w.bench("status").stdout
+        self.assertIn("lamps   0x00 (dark)", st)
+        self.assertIn("session none", st)
+
+    def test_no_token_refuses_run(self):
+        w = addWorld(self)
+        w.disarm()
+        self.assert_refused(w, w.bench("run", w.script("WAIT 1\n")))
+
+    def test_token_file_arms_run(self):
+        w = addWorld(self)
+        self.assertEqual(w.bench("run", w.script("WAIT 1\n")).returncode, 0)
+
+    def test_env_token_arms_run(self):
+        w = addWorld(self)
+        w.disarm()
+        key = w.root / "owner.key"
+        key.write_text("")
+        w.env["BENCH_TOKEN"] = str(key)
+        self.assertEqual(w.bench("run", w.script("WAIT 1\n")).returncode, 0)
+
+    def test_env_token_must_exist(self):
+        w = addWorld(self)
+        w.disarm()
+        w.env["BENCH_TOKEN"] = str(w.root / "missing.key")
+        self.assert_refused(w, w.bench("run", w.script("WAIT 1\n")))
+
+    def test_token_must_be_a_file(self):
+        w = addWorld(self)
+        w.disarm()
+        w.token.mkdir(parents=True)
+        self.assert_refused(w, w.bench("run", w.script("WAIT 1\n")))
+
+    def test_demo_and_status_need_no_token(self):
+        w = addWorld(self)
+        w.disarm()
+        self.assertEqual(w.bench("status").returncode, 0)
+        self.assertEqual(w.bench("demo").returncode, 0)
+
+    def test_c_parser_agrees_with_rom_write_table(self):
+        # same table as tests/rom/test_arm.py, run through the C parser. arm by env so
+        # sessions/current/token starts absent and must still be absent after.
+        sys.path.insert(0, str(IMAGE / "tests" / "rom"))
+        from test_arm import WRITE_TABLE
+        for path, ok in WRITE_TABLE:
+            if not path:
+                continue   # an empty field is a parse error in C for a different reason
+            with self.subTest(path=path):
+                w = addWorld(self)
+                w.disarm()
+                key = w.root / "owner.key"
+                key.write_text("")
+                w.env["BENCH_TOKEN"] = str(key)
+                r = w.bench("run", w.script(f"WRITE fs {path} minted\n"))
+                self.assertEqual(r.returncode == 0, ok, r.stdout)
+                self.assertFalse(w.token.exists(), "a WRITE minted the owner token")
 
 
 def hold_quota():
