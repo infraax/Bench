@@ -338,6 +338,47 @@ class TestHoldQuota(unittest.TestCase):
         r = w.bench("run", w.script("WRITE fs hold/note.txt still fits\n"))
         self.assertEqual(r.returncode, 0, r.stdout)
 
+    def test_flag_raises_quota_for_one_run(self):
+        w = addWorld(self)
+        prog = self.writer(w, hold_quota() + 1)
+        r = w.bench("run", "--hold-quota", str(hold_quota() + 1), w.script(f"EXEC {prog}\n"), timeout=30)
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertIn(f"hold_quota={hold_quota() + 1}\n", (w.session() / "SESSION").read_text())
+
+    def test_env_lowers_quota(self):
+        w = addWorld(self)
+        w.env["BENCH_HOLD_QUOTA"] = "10"
+        r = w.bench("run", w.script("WRITE fs hold/a.txt eleven bytes\n"))
+        self.assertNotEqual(r.returncode, 0, r.stdout)
+        self.assertIn("hold-quota", r.stdout)
+
+    def test_flag_beats_env(self):
+        w = addWorld(self)
+        w.env["BENCH_HOLD_QUOTA"] = "10"
+        r = w.bench("run", "--hold-quota", "100", w.script("WRITE fs hold/a.txt eleven bytes\n"))
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertIn("hold_quota=100\n", (w.session() / "SESSION").read_text())
+
+    def test_zero_quota_means_hold_may_not_grow(self):
+        w = addWorld(self)
+        ok = w.bench("run", "--hold-quota", "0", w.script("WAIT 1\n"))
+        self.assertEqual(ok.returncode, 0, ok.stdout)
+        grow = w.bench("run", "--hold-quota", "0", w.script("WRITE fs hold/a.txt x\n"))
+        self.assertIn("hold-quota", grow.stdout)
+
+    def test_bad_quota_is_usage_error_before_any_session(self):
+        for bad in ("-1", "1k", " 5", "", "0x10", "99999999999"):
+            with self.subTest(bad=bad):
+                w = addWorld(self)
+                r = w.bench("run", "--hold-quota", bad, w.script("WAIT 1\n"))
+                self.assertEqual(r.returncode, 2, r.stdout)
+                self.assertFalse((w.root / "sessions" / "CURRENT").exists())
+        w = addWorld(self)
+        w.env["BENCH_HOLD_QUOTA"] = "lots"
+        self.assertEqual(w.bench("run", w.script("WAIT 1\n")).returncode, 2)
+        w.env["BENCH_HOLD_QUOTA"] = ""          # empty env is unset: the default applies
+        self.assertEqual(w.bench("run", w.script("WAIT 1\n")).returncode, 0)
+
     def test_quota_is_frozen_in_session_file(self):
         w = addWorld(self)
         self.assertEqual(w.bench("run", w.script("WAIT 1\n")).returncode, 0)

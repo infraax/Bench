@@ -11,10 +11,12 @@
 #endif
 
 /* hold/ budget per session: bytes hold/ may grow past its size at s0. counted after every
-   tool (WRITE and anything an EXEC'd tool wrote). over quota is a failed step, snapped. */
+   tool (WRITE and anything an EXEC'd tool wrote). over quota is a failed step, snapped.
+   this is the default; the owner may set it per run (--hold-quota, BENCH_HOLD_QUOTA). */
 #ifndef HOLD_QUOTA_BYTES
 #define HOLD_QUOTA_BYTES 65536u
 #endif
+#define HOLD_QUOTA_CEIL  0xffffffffull   /* a run-time override above this is a usage error */
 
 /* same numbering as isa/hotz_isa.py Op. five. there is no sixth. */
 typedef enum { OP_READ=1, OP_WRITE, OP_EXEC, OP_TEST, OP_WAIT } Op;
@@ -26,6 +28,7 @@ typedef struct {
     uint32_t t_sess_ms;
     uint64_t t0_ns, last_snap_ns;
     uint64_t hold_base;      /* bytes in hold/ at session start; the quota counts growth past it */
+    uint64_t hold_quota;     /* frozen at start, like N */
     Bus      bus;            /* woz bits — lamps live here, we do not keep a second copy */
     uint32_t k;              /* next snap index: snap-<k>/ */
     char     snap_id[24];
@@ -38,7 +41,7 @@ typedef int (*Tool)(Session *s, void *arg);
 
 uint64_t nowns(void);
 int  session_start(Session *s, const char *root, const char *dir,
-                   uint32_t n, uint32_t k, uint32_t ts, uint32_t tt, uint32_t tS);
+                   uint32_t n, uint32_t k, uint32_t ts, uint32_t tt, uint32_t tS, uint64_t hq);
 int  frame(Session *s, Op op, Tool tool, void *arg, int k_due);
 int  snap(Session *s, const char *why);
 int  session_state(const Session *s, const char *status);

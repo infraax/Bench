@@ -248,9 +248,9 @@ int frame(Session *s, Op op, Tool tool, void *arg, int k_due) {
         if (hold_bytes(s, &hb) != 0) {
             snprintf(s->ev, sizeof s->ev, "fault=hold-unreadable");
             rc = 1;
-        } else if (hb > s->hold_base && hb - s->hold_base > HOLD_QUOTA_BYTES) {
-            snprintf(s->ev, sizeof s->ev, "fault=hold-quota grew=%llu quota=%u",
-                     (unsigned long long)(hb - s->hold_base), (unsigned)HOLD_QUOTA_BYTES);
+        } else if (hb > s->hold_base && hb - s->hold_base > s->hold_quota) {
+            snprintf(s->ev, sizeof s->ev, "fault=hold-quota grew=%llu quota=%llu",
+                     (unsigned long long)(hb - s->hold_base), (unsigned long long)s->hold_quota);
             rc = 1;
         }
     }
@@ -277,7 +277,7 @@ int frame(Session *s, Op op, Tool tool, void *arg, int k_due) {
 }
 
 int session_start(Session *s, const char *root, const char *dir,
-                  uint32_t n, uint32_t k, uint32_t ts, uint32_t tt, uint32_t tS) {
+                  uint32_t n, uint32_t k, uint32_t ts, uint32_t tt, uint32_t tS, uint64_t hq) {
     memset(s, 0, sizeof *s);
     s->n_max = n ? n : N_MAX_DEFAULT;
     s->k_snap = k ? k : 1;
@@ -288,6 +288,7 @@ int session_start(Session *s, const char *root, const char *dir,
     s->t0_ns = nowns();
     snprintf(s->root, sizeof s->root, "%s", root);
     snprintf(s->dir, sizeof s->dir, "%s", dir);
+    s->hold_quota = hq;
     if (hold_bytes(s, &s->hold_base) != 0) return -1;
 
     /* radio off by default. no eyes, no judge. fs and tty wired. */
@@ -304,9 +305,9 @@ int session_start(Session *s, const char *root, const char *dir,
     if (mkdirs(dir) || path_join(path, sizeof path, dir, "SESSION")) return -1;
     snprintf(text, sizeof text,
              "N_max=%u\nK=%u\nT_frame_ms=%u\nT_tool_ms=%u\nT_session_ms=%u\nplug=0x%02x\n"
-             "hold_quota=%u\nhold_base=%llu\n",
+             "hold_quota=%llu\nhold_base=%llu\n",
              s->n_max, s->k_snap, s->t_step_ms, s->t_tool_ms, s->t_sess_ms, s->bus.plug,
-             (unsigned)HOLD_QUOTA_BYTES, (unsigned long long)s->hold_base);
+             (unsigned long long)s->hold_quota, (unsigned long long)s->hold_base);
     if (write_atomic(path, text)) return -1;
     return snap(s, "s0");
 }
