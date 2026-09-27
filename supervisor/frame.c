@@ -267,11 +267,12 @@ static int snap_board(Session *s, const char *why, const char *skip) {
     snprintf(id, sizeof id, "%03u-%08x", k, (unsigned)(nowns() & 0xffffffffu));
     snprintf(man, sizeof man,
              "snap=%s\nwhy=%s\nn=%u\nN_max=%u\nK=%u\nT_step_ms=%u\nT_session_ms=%u\n"
-             "caps=fs:%u,tty:%u,fb:%u,judge:%u,radio:%u\nlamps=0x%02x\nplug=0x%02x\ntree=%s\nevidence=%s\n",
+             "caps=fs:%u,tty:%u,fb:%u,judge:%u,radio:%u\nlamps=0x%02x\nplug=0x%02x\ntree=%s\nevidence=%s\n"
+             "out=%s\n",
              id, why, s->n, s->n_max, s->k_snap, s->t_step_ms, s->t_sess_ms,
              s->bus.cap[SLOT_FS], s->bus.cap[SLOT_TTY], s->bus.cap[SLOT_FB],
              s->bus.cap[SLOT_JUDGE], s->bus.cap[SLOT_RADIO],
-             s->bus.lamps, s->bus.plug, hash, s->ev[0] ? s->ev : "none");
+             s->bus.lamps, s->bus.plug, hash, s->ev[0] ? s->ev : "none", s->out[0] ? s->out : "none");
     if (path_join(path, sizeof path, tmp, "MANIFEST") || write_atomic(path, man)) return -1;
 
     char src[1024], dst[1100];

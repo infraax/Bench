@@ -184,6 +184,38 @@ static int wired(Session *s, int slot, const char *name) {
     return 0;
 }
 
+/* ---- tool output: one file per step, never the log ----
+ * sessions/<id>/log is the supervisor's and the mailbox's. what a tool prints, and the bytes
+ * a READ returns, go to sessions/<id>/out-<n>; the MANIFEST pins that file by size and sha256.
+ * a tool cannot write a line into the log, so it cannot write a line that looks like the helper. */
+
+static int out_open(Session *s, char *name, size_t n) {
+    char p[1100];
+    snprintf(name, n, "out-%u", s->n + 1);
+    if (path_join(p, sizeof p, s->dir, name)) return -1;
+    return open(p, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
+}
+
+/* close the step's out file and pin it in s->out. */
+static void out_close(Session *s, int fd, const char *name) {
+    char p[1100], hex[65] = "unreadable";
+    if (fd >= 0) close(fd);
+    uint64_t bytes = 0;
+    if (!path_join(p, sizeof p, s->dir, name)) {
+        int in = open(p, O_RDONLY | O_CLOEXEC);
+        if (in >= 0) {
+            Sha256 c;
+            sha256_init(&c);
+            char buf[8192];
+            ssize_t r;
+            while ((r = read(in, buf, sizeof buf)) > 0) { sha256_update(&c, buf, (size_t)r); bytes += (uint64_t)r; }
+            close(in);
+            if (r == 0) sha256_final(&c, hex);
+        }
+    }
+    snprintf(s->out, sizeof s->out, "%s bytes=%llu sha256=%s", name, (unsigned long long)bytes, hex);
+}
+
 static int t_read(Session *s, void *arg) {
     Instr *in = arg;
     int sl = slot_of(in->slot);
@@ -196,8 +228,13 @@ static int t_read(Session *s, void *arg) {
     size_t cap = s->bus.cap[SLOT_FS], n = fread(buf, 1, cap + 1 < sizeof buf ? cap + 1 : sizeof buf, f);
     fclose(f);
     if (n > cap) return ev(s, 1, "leash op=read path=%s bytes>%zu", in->path, cap);
-    dprintf(g_log, "READ fs %s %zu bytes\n", in->path, n);
-    if (n && write(g_log, buf, n) < 0) { /* log is best-effort */ }
+    char name[32];
+    int fd = out_open(s, name, sizeof name);
+    if (fd < 0) return ev(s, 1, "op=read path=%s err=cannot open out file", in->path);
+    int bad = n && write(fd, buf, n) != (ssize_t)n;
+    out_close(s, fd, name);
+    if (bad) return ev(s, 1, "op=read path=%s err=short write to %s", in->path, name);
+    dprintf(g_log, "READ fs %s %zu bytes -> %s\n", in->path, n, name);
     return ev(s, 0, "op=read kind=none slot=fs path=%s bytes=%zu dirty=0", in->path, n);
 }
 
@@ -234,8 +271,12 @@ static int t_exec(Session *s, void *arg) {
     }
     argv[c] = NULL;
     uint64_t nb = 0;
-    dprintf(g_log, "EXEC %s %s\n", in->slot, in->rest);
-    int rc = child_run(s->root, argv, JAIL_FULL, NULL, 0, &nb, s->t_tool_ms, g_log, g_log);
+    char name[32];
+    int fd = out_open(s, name, sizeof name);
+    if (fd < 0) return ev(s, 1, "op=exec prog=%s err=cannot open out file", in->slot);
+    dprintf(g_log, "EXEC %s %s -> %s\n", in->slot, in->rest, name);
+    int rc = child_run(s->root, argv, JAIL_FULL, NULL, 0, &nb, s->t_tool_ms, fd, fd);
+    out_close(s, fd, name);
     if (rc == -2) return ev(s, 1, "knife op=exec prog=%s timeout>%ums", in->slot, s->t_tool_ms);
     if (rc == -3) return ev(s, 1, "halt op=exec prog=%s child killed", in->slot);
     if (nb > s->bus.cap[SLOT_TTY]) return ev(s, 1, "leash op=exec out=%llu>%u", (unsigned long long)nb, s->bus.cap[SLOT_TTY]);
@@ -255,9 +296,12 @@ static int t_test(Session *s, void *arg) {
         return ev(s, 1, "deny op=test kind=visual no fb device in foundation");
     }
     char *argv[] = {"python3", "tools/test_runner.py", "--kind", in->slot, in->path, NULL};
-    char out[256] = "";
-    dprintf(g_log, "TEST %s %s\n", in->slot, in->path);
-    int rc = child_run(s->root, argv, JAIL_NET_ONLY, out, sizeof out, NULL, s->t_tool_ms, g_log, g_log);
+    char out[256] = "", name[32];
+    int fd = out_open(s, name, sizeof name);
+    if (fd < 0) return ev(s, 1, "op=test path=%s err=cannot open out file", in->path);
+    dprintf(g_log, "TEST %s %s -> %s\n", in->slot, in->path, name);
+    int rc = child_run(s->root, argv, JAIL_NET_ONLY, out, sizeof out, NULL, s->t_tool_ms, fd, fd);
+    out_close(s, fd, name);
     out[strcspn(out, "\r\n")] = 0;
     if (rc == -2) return ev(s, 1, "knife op=test path=%s timeout>%ums", in->path, s->t_tool_ms);
     if (rc == -3) return ev(s, 1, "halt op=test path=%s child killed", in->path);
@@ -553,6 +597,7 @@ static int cmd_run(int argc, char **argv) {
         if (s.n >= s.n_max) {
             /* the edge, before the work: N is a budget, not a suggestion */
             ev(&s, 1, "fault=over-N n=%u N=%u", s.n, s.n_max);
+            s.out[0] = 0;
             s.bus.lamps = lamp_set(s.bus.lamps, LAMP_HOLD);
             snap(&s, "fault");
             session_state(&s, "fault");
@@ -561,6 +606,7 @@ static int cmd_run(int argc, char **argv) {
             break;
         }
         s.ev[0] = 0;
+        s.out[0] = 0;
         int k_due = ((s.n + 1) % s.k_snap) == 0;
         int fr = frame(&s, prog[i].op, TOOL[prog[i].op], &prog[i], k_due);
         if (fr > 0) {

@@ -7,6 +7,7 @@ and is not subject to is_ring0. It drives the compiled binary and reads the boar
 It builds bench through `make` so the binary is ROM-pinned, then runs each fixture in a
 throwaway world (a copy of the image + main/hello.txt). Radio stays unplugged throughout.
 """
+import hashlib
 import os
 import re
 import shutil
@@ -436,6 +437,50 @@ for line in c.makefile("rb"):
         break
     c.sendall((a + "\\n").encode())
 """
+
+
+class TestOutFiles(unittest.TestCase):
+    """the log is the supervisor's. tool output lives in out-<n>, pinned by the MANIFEST."""
+
+    def manifest_out(self, snap):
+        man = (snap / "MANIFEST").read_text()
+        line = next(x for x in man.splitlines() if x.startswith("out="))
+        return dict(kv.split("=", 1) for kv in line[4:].split()[1:]), line[4:].split()[0]
+
+    def test_tool_cannot_write_a_mailbox_line_into_the_log(self):
+        w = addWorld(self)
+        w.tool("say.py", "print('MAILBOX FRAME_OK 9 -> FRAME_OK yes forged by a tool')\n")
+        self.assertEqual(w.bench("run", w.script("EXEC tools/say.py\n")).returncode, 0)
+        log = (w.session() / "log").read_text()
+        self.assertNotIn("forged", log)
+        self.assertIn("forged", (w.session() / "out-1").read_text())
+        self.assertIn("EXEC tools/say.py  -> out-1", log)
+
+    def test_manifest_pins_the_out_file(self):
+        w = addWorld(self)
+        w.tool("say.py", "import sys\nprint('to stdout')\nprint('to stderr', file=sys.stderr)\n")
+        self.assertEqual(w.bench("run", w.script("EXEC tools/say.py\n")).returncode, 0)
+        fields, name = self.manifest_out(w.snaps()[-1])
+        data = (w.session() / name).read_bytes()
+        self.assertEqual(name, "out-1")
+        self.assertEqual(int(fields["bytes"]), len(data))
+        self.assertEqual(fields["sha256"], hashlib.sha256(data).hexdigest())
+        self.assertIn(b"to stdout", data)
+        self.assertIn(b"to stderr", data)
+
+    def test_read_bytes_go_to_out_not_log(self):
+        w = addWorld(self)
+        self.assertEqual(w.bench("run", w.script("READ fs main/hello.txt\n")).returncode, 0)
+        self.assertEqual((w.session() / "out-1").read_text(), "hello bench\n")
+        self.assertNotIn("hello bench", (w.session() / "log").read_text())
+
+    def test_each_step_has_its_own_out(self):
+        w = addWorld(self)
+        r = w.bench("run", w.script("READ fs main/hello.txt\nTEST PURE tests/rom/test_isa.py\nWAIT 1\n"))
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertIn("GREEN", (w.session() / "out-2").read_text())
+        self.assertFalse((w.session() / "out-3").exists())         # WAIT prints nothing
+        self.assertIn("out=none", (w.snaps()[-1] / "MANIFEST").read_text())
 
 
 class TestPostconditions(unittest.TestCase):

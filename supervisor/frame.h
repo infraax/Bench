@@ -44,6 +44,7 @@ struct Session {
     uint32_t k;              /* next snap index: snap-<k>/ */
     char     snap_id[24];
     char     ev[256];        /* evidence ticket of the current step; lands in the next MANIFEST */
+    char     out[128];       /* the step's out-<n> file: name, bytes, sha256. MANIFEST out= */
     char     root[512];      /* the world: main/ hold/ tools/ tests/rom/ */
     char     dir[768];       /* sessions/<id> */
 };
