@@ -20,7 +20,7 @@ from pathlib import Path
 IMAGE = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(IMAGE))
 sys.path.insert(0, str(IMAGE / "tools"))
-from isa.hotz_isa import OWNER_TOKEN, Op  # noqa: E402
+from isa.hotz_isa import OWNER_TOKEN, Kind, Op, Ring, Step, hook  # noqa: E402
 from isa.karpathy_rom import is_ring0  # noqa: E402
 from peek import woz_bits  # noqa: E402
 
@@ -155,6 +155,26 @@ class TestBoard(unittest.TestCase):
         names = re.findall(r"OP_(\w+)", enum)
         self.assertEqual(names, ["READ", "WRITE", "EXEC", "TEST", "WAIT"])
         self.assertEqual([Op[n].value for n in names], [1, 2, 3, 4, 5])
+
+    def test_hook_agrees_with_c_gates(self):
+        # default board: fs + tty plugged, fb/judge/radio pulled. hook() deny <=> C deny.
+        plugged = frozenset({"fs", "tty"})
+        table = [
+            ("READ fs main/hello.txt", Step(Op.READ, "fs", "main/hello.txt", None, Ring.WORK)),
+            ("READ fb main/hello.txt", Step(Op.READ, "fb", "main/hello.txt", None, Ring.WORK)),
+            ("READ judge main/hello.txt", Step(Op.READ, "judge", "main/hello.txt", None, Ring.WORK)),
+            ("EXEC tools/hash.py main/hello.txt", Step(Op.EXEC, "tools/hash.py", "main/hello.txt", None, Ring.WORK)),
+            ("TEST PURE tests/rom/test_isa.py", Step(Op.TEST, "fs", "tests/rom/test_isa.py", Kind.PURE, Ring.WORK)),
+            ("TEST JUDGE tests/rom/test_isa.py", Step(Op.TEST, "fs", "tests/rom/test_isa.py", Kind.JUDGE, Ring.HOLD)),
+            ("TEST VISUAL tests/rom/test_isa.py", Step(Op.TEST, "fs", "tests/rom/test_isa.py", Kind.VISUAL, Ring.WORK)),
+            ("WAIT 1", Step(Op.WAIT, "", "1", None, Ring.WORK)),
+        ]
+        for line, step in table:
+            with self.subTest(line=line):
+                w = addWorld(self)
+                r = w.bench("run", w.script(line + "\n"))
+                c_denied = "deny" in r.stdout
+                self.assertEqual(hook(step, plugged, radio=False) is None, c_denied, r.stdout)
 
     def test_status_mirrors_lamp_byte(self):
         w = addWorld(self)

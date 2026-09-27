@@ -25,6 +25,7 @@ class Ring(FastEnum):
     ROM=0; HOLD=1; WORK=2
 
 class UCache(type):
+    # interns Step only (the type table below is Step's), so the key is the fields alone.
     # dead terms drop out of the table on their own; the cache never holds a term alive.
     _c: weakref.WeakValueDictionary = weakref.WeakValueDictionary()
     def __call__(cls, *a):
@@ -38,14 +39,15 @@ class UCache(type):
         cls._c[a] = o
         return o
 
-_TYPES = (Op, str, str, (Kind, type(None)), Ring)
+# exact types, not isinstance: a str subclass could carry a __dict__ into a frozen term.
+_TYPES = ((Op,), (str,), (str,), (Kind, type(None)), (Ring,))
 
 def _typecheck(a: tuple) -> None:
     if len(a) != len(_TYPES):
         raise TypeError(f"Step takes {len(_TYPES)} positional fields, got {len(a)}")
     for v, t in zip(a, _TYPES):
-        if not isinstance(v, t):
-            raise TypeError(f"Step field {v!r} is not {t}")
+        if type(v) not in t:
+            raise TypeError(f"Step field {v!r} is not exactly {' | '.join(x.__name__ for x in t)}")
 
 # slots is the constructor law: no extra attributes, no sixth field taped on at runtime.
 # frozen: a term is shared by every holder of the same key, so it may not change after birth.
@@ -96,11 +98,13 @@ def intern_may_write(path: str) -> bool:
             and ".." not in path and path.startswith(INTERN_WRITE_ROOTS))
 
 def hook(step: Step, plugged: frozenset[str], radio: bool) -> Step | None:
-    """deny is None. rewrite must stay in ACTUATORS. no new ontology here."""
-    if step.slot and step.slot not in plugged and step.op in {Op.READ, Op.WRITE, Op.EXEC}:
-        return None
-    if step.kind is Kind.JUDGE and not radio: return None
-    if step.op in SUPER: return step  # supervisor path, already gated by Ring
+    """deny is None; a pass is the same term. no rewrite, no new ontology here.
+    the same gates as the C tools (supervisor/main.c wired / t_exec / t_test)."""
+    if step.op in SUPER: return step                       # ring-gated at birth
+    if step.op in (Op.READ, Op.WRITE) and step.slot not in plugged: return None
+    if step.op is Op.EXEC and "fs" not in plugged: return None    # slot is the program; tools live on fs
+    if step.kind is Kind.JUDGE and not ("judge" in plugged and radio): return None
+    if step.kind is Kind.VISUAL and "fb" not in plugged: return None
     return step
 
 def intern_ok() -> Step:
