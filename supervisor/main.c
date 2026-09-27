@@ -982,6 +982,16 @@ static int cmd_restore(int argc, char **argv) {
         fprintf(stderr, "restore: %s/%s holds no board (tree=%s)\n", sid, sname, tree[0] ? tree : "?");
         return 1;
     }
+    /* integrity first, independent of main/: the snap's stored hold must match board=. */
+    char btree[80], bnow[65];
+    const char *bp[] = {"hold"};
+    if (kv(buf, "board", btree, sizeof btree) && strlen(btree) == 64) {
+        if (tree_hash(snapdir, bp, 1, bnow) != 0 || strcmp(bnow, btree)) {
+            fprintf(stderr, "restore: %s/%s stored hold is corrupt (board hash mismatch). nothing moved.\n",
+                    sid, sname);
+            return 1;
+        }
+    }
     const char *paths[] = {"main", "hold"};
     const char *from_snap[] = {g_root, snapdir};
     char hex[65];
@@ -1061,6 +1071,73 @@ static int cmd_snap_ls(void) {
     return 0;
 }
 
+/* verify a snapshot's stored board against the hash it recorded: content-addressed, so it
+   catches a mutation of any (possibly shared) inode regardless of who made it — root, a tool,
+   bit rot. `bench verify [snap-<k> | <session>/snap-<k>]`, or no arg for every snap of the
+   current session. 0 all intact · 1 a mismatch or a damaged snap · 2 usage. */
+static int verify_one(const char *sdir, const char *sname, int *checked, int *noboard) {
+    char man[1200], buf[2048], want[80], now[65];
+    const char *hp[] = {"hold"};
+    char snapdir[1100];
+    if (path_join(snapdir, sizeof snapdir, sdir, sname) || path_join(man, sizeof man, snapdir, "MANIFEST"))
+        return -1;
+    if (read_small(man, buf, sizeof buf)) { fprintf(stderr, "verify: %s has no MANIFEST\n", sname); return 1; }
+    if (!kv(buf, "board", want, sizeof want) || !strcmp(want, "none")) { (*noboard)++; return 0; }
+    if (tree_hash(snapdir, hp, 1, now) != 0) { fprintf(stderr, "verify: cannot hash %s/hold\n", sname); return 1; }
+    (*checked)++;
+    if (strcmp(want, now) != 0) {
+        printf("VERIFY %s MISMATCH board stored=%.12s now=%.12s\n", sname, want, now);
+        return 1;
+    }
+    return 0;
+}
+
+static int cmd_verify(int argc, char **argv) {
+    if (argc > 1) { fprintf(stderr, "usage: bench verify [snap-<k> | <session>/snap-<k>]\n"); return 2; }
+    char sid[128], sdir[1024], cdir[1024];
+    const char *one = NULL, *arg = argc == 1 ? argv[0] : NULL;
+    char sname[32] = "";
+    if (arg) {
+        const char *slash = strchr(arg, '/');
+        if (slash) {
+            size_t l = (size_t)(slash - arg);
+            if (l == 0 || l >= sizeof sid) { fprintf(stderr, "verify: bad session in %s\n", arg); return 2; }
+            memcpy(sid, arg, l); sid[l] = 0;
+            snprintf(sname, sizeof sname, "%.31s", slash + 1);
+        } else {
+            if (current_dir(cdir, sizeof cdir, sid, sizeof sid)) { fprintf(stderr, "verify: no current session\n"); return 1; }
+            snprintf(sname, sizeof sname, "%.31s", arg);
+        }
+        char *end;
+        if (strncmp(sname, "snap-", 5) || !sname[5] || (strtoul(sname + 5, &end, 10), *end) ||
+            strchr(sid, '/') || strstr(sid, "..") || sid[0] == '.') {
+            fprintf(stderr, "verify: '%s' is not <session>/snap-<k>\n", arg);
+            return 2;
+        }
+        one = sname;
+    } else if (current_dir(cdir, sizeof cdir, sid, sizeof sid)) {
+        fprintf(stderr, "verify: no current session\n");
+        return 1;
+    }
+    if (sessions_path(sdir, sizeof sdir, sid)) return 1;
+
+    int checked = 0, noboard = 0, rc = 0;
+    if (one) {
+        rc = verify_one(sdir, one, &checked, &noboard);
+    } else {
+        for (unsigned k = 0;; k++) {
+            char name[32], probe[1200];
+            struct stat st;
+            snprintf(name, sizeof name, "snap-%u", k);
+            if (path_join(probe, sizeof probe, sdir, name) || lstat(probe, &st) != 0) break;
+            int r = verify_one(sdir, name, &checked, &noboard);
+            if (r != 0) { rc = r; break; }
+        }
+    }
+    if (rc == 0) printf("VERIFY %s ok checked=%d noboard=%d\n", sid, checked, noboard);
+    return rc;
+}
+
 int main(int argc, char **argv) {
     const char *r = getenv("BENCH_ROOT");
     if (r && *r) g_root = r;
@@ -1075,8 +1152,9 @@ int main(int argc, char **argv) {
     if (!strcmp(argv[1], "demo")) return cmd_demo();
     if (!strcmp(argv[1], "snap-ls")) return cmd_snap_ls();
     if (!strcmp(argv[1], "restore")) return cmd_restore(argc - 2, argv + 2);
+    if (!strcmp(argv[1], "verify")) return cmd_verify(argc - 2, argv + 2);
 usage:
     fprintf(stderr, "usage: bench status [--line] | run [--n N] [--hold-quota BYTES] [--hold-files N] [script|-]"
-                    " | kill | demo | snap-ls | restore snap-<k>\n");
+                    " | kill | demo | snap-ls | restore snap-<k> | verify [snap-<k>]\n");
     return 2;
 }

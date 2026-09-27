@@ -388,7 +388,7 @@ static int snap_board(Session *s, const char *why, const char *skip) {
              s->bus.lamps, s->bus.plug, hash, s->ev[0] ? s->ev : "none", s->out[0] ? s->out : "none");
     if (path_join(path, sizeof path, tmp, "MANIFEST") || write_atomic(path, man)) return -1;
 
-    char src[1024], dst[1100];
+    char src[1024], dst[1100], bhash[80] = "none";
     if (path_join(src, sizeof src, s->root, "hold") || path_join(dst, sizeof dst, tmp, "hold")) return -1;
     if (board) {
         Idx prev = {0};
@@ -406,9 +406,19 @@ static int snap_board(Session *s, const char *why, const char *skip) {
         if (d.index && fclose(d.index) != 0) bad = 1;
         idx_free(&prev);
         if (bad) return -1;
+        /* board=: a self-contained content hash of THIS snap's stored hold/ copy — the
+           uid-independent integrity record. `bench verify` recomputes and compares, so a
+           mutation of any shared inode is caught even by an actor mode bits cannot stop. */
+        const char *hp[] = {"hold"};
+        if (tree_hash(tmp, hp, 1, bhash) != 0) return -1;
         FILE *mf = fopen(path, "a");     /* path is still the MANIFEST */
         if (!mf) return -1;
-        fprintf(mf, "delta=linked:%u copied:%u\n", d.linked, d.copied);
+        fprintf(mf, "delta=linked:%u copied:%u\nboard=%s\n", d.linked, d.copied, bhash);
+        if (fclose(mf) != 0) return -1;
+    } else {
+        FILE *mf = fopen(path, "a");
+        if (!mf) return -1;
+        fprintf(mf, "board=none\n");
         if (fclose(mf) != 0) return -1;
     }
 

@@ -700,6 +700,77 @@ class TestDeltaSnaps(unittest.TestCase):
         self.assertEqual(self.delta(w.snaps()[-1]), (1000, 0))
 
 
+class TestVerify(unittest.TestCase):
+    """bench verify: a snapshot's stored hold is content-addressed (board=). verify recomputes
+    and compares, so a mutation is caught regardless of who made it — the root-proof guarantee."""
+
+    def run3(self):
+        w = addWorld(self)
+        (w.root / "hold" / "keep.txt").write_text("v1\n")
+        r = w.bench("run", w.script("WRITE fs hold/b.txt x\nWAIT 1\n"))
+        self.assertEqual(r.returncode, 0, r.stdout)
+        return w
+
+    def unseal_edit(self, path, text):
+        # act as root would: chmod past the seal, then write in place. mode bits cannot stop this.
+        os.chmod(path.parent, 0o755)
+        path.chmod(0o644)
+        path.write_text(text)
+
+    def test_manifest_records_a_board_hash(self):
+        w = self.run3()
+        man = (w.snaps()[-1] / "MANIFEST").read_text()
+        m = re.search(r"^board=([0-9a-f]{64})$", man, re.M)
+        self.assertIsNotNone(m, man)
+
+    def test_clean_session_verifies(self):
+        w = self.run3()
+        r = w.bench("verify")
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertRegex(r.stdout.strip(), r"^VERIFY \S+ ok checked=\d+ noboard=\d+$")
+
+    def test_tamper_is_caught_even_as_root(self):
+        w = self.run3()
+        victim = w.snaps()[-1] / "hold" / "keep.txt"
+        self.unseal_edit(victim, "tampered\n")
+        self.assertEqual(victim.read_text(), "tampered\n")   # root did mutate the bytes
+        r = w.bench("verify")
+        self.assertEqual(r.returncode, 1, r.stdout)           # ...and verify catches it anyway
+        self.assertIn("MISMATCH", r.stdout)
+
+    def test_mutating_a_shared_inode_is_caught_on_every_linked_snap(self):
+        # keep.txt is linked across snaps; one in-place edit changes them all. verify flags each.
+        w = self.run3()
+        first = w.snaps()[1] / "hold" / "keep.txt"     # snap-1 (snap-0 is s0, empty hold)
+        self.unseal_edit(first, "poison\n")
+        for snap in w.snaps():
+            k = snap.name
+            if not (snap / "hold" / "keep.txt").exists():
+                continue
+            r = w.bench("verify", k)
+            self.assertEqual(r.returncode, 1, f"{k}: {r.stdout}")
+            self.assertIn("MISMATCH", r.stdout)
+
+    def test_verify_one_snap(self):
+        w = self.run3()
+        r = w.bench("verify", "snap-0")
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertIn("checked=", r.stdout)
+
+    def test_skipped_board_counts_as_noboard(self):
+        w = addWorld(self)
+        w.bench("run", "--hold-quota", "1", w.script("WRITE fs hold/big.txt too big\n"))
+        r = w.bench("verify", "snap-1")            # over-quota step: board=none
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertIn("noboard=1", r.stdout)
+
+    def test_bad_names(self):
+        w = self.run3()
+        for bad in ("../x/snap-0", "snap-", "snap-0x", "/snap-0", "MANIFEST"):
+            with self.subTest(bad=bad):
+                self.assertEqual(w.bench("verify", bad).returncode, 2)
+
+
 class TestRestore(unittest.TestCase):
     """bench restore <snap>: resume = load snap. verified before anything moves."""
 
@@ -742,7 +813,7 @@ class TestRestore(unittest.TestCase):
         victim.write_text("forged\n")
         r = w.bench("restore", "snap-1")
         self.assertEqual(r.returncode, 1, r.stdout)
-        self.assertIn("does not hash", r.stdout)
+        self.assertIn("corrupt", r.stdout)         # caught by the board= integrity check
         self.assertEqual((w.root / "hold" / "a.txt").read_text(), "two\n")
 
     def test_main_changed_since_moves_nothing(self):
