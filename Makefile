@@ -22,9 +22,14 @@ $(ROMH): supervisor/romhash $(ROM_FILES)
 supervisor/bench: $(BENCH_SRC) $(HDR) $(ROMH)
 	$(CC) $(CFLAGS) -o $@ $(BENCH_SRC)
 
-# ring 0 (pure algebra), then the make-launched harness that drives the binary.
+# the bus, exhaustively: every lamp byte x bit, every plug byte x pull. C, no python.
+supervisor/bus_test: supervisor/bus_test.c supervisor/woz_bus.h
+	$(CC) $(CFLAGS) -o $@ supervisor/bus_test.c
+
+# bus, then ring 0 (pure algebra), then the make-launched harness that drives the binary.
 # pytest if present, stdlib unittest otherwise. no network either way.
-test: supervisor/bench
+test: supervisor/bench supervisor/bus_test
+	@./supervisor/bus_test
 	@if $(PY) -c "import pytest" 2>/dev/null; then \
 		$(PY) -m pytest tests/rom tests/harness -q; \
 	else \
@@ -47,7 +52,7 @@ e2e: supervisor/bench
 	BENCH_ROOT=$(E2E) ./supervisor/bench demo
 
 clean:
-	rm -f supervisor/bench supervisor/romhash $(ROMH)
+	rm -f supervisor/bench supervisor/romhash supervisor/bus_test $(ROMH)
 	find sessions -mindepth 1 ! -name .gitkeep ! -name OWNER_TOKEN -exec rm -rf {} +   # clean does not disarm
 
 .PHONY: all test demo e2e clean

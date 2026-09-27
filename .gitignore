@@ -6,3 +6,4 @@ __pycache__/
 .pytest_cache/
 supervisor/romhash
 supervisor/rom_hash.h
+supervisor/bus_test
