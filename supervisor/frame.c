@@ -334,12 +334,35 @@ static int raw_same(const Raw *a, const Raw *b) {
             a->mtime.tv_sec == b->mtime.tv_sec && a->mtime.tv_nsec == b->mtime.tv_nsec));
 }
 
-typedef struct { char main_h[65], rom_h[65]; Raw tok, env; } Board;
+typedef struct { char main_h[65], rom_h[65], sess_h[65]; Raw tok, env; } Board;
+
+/* hash the session's frozen artifacts: SESSION, OPS, and every snapshot already written.
+   these never change once laid down, so a TEST that rewrites a prior snapshot, its MANIFEST,
+   INDEX, or the SESSION/OPS files is caught. the current step's out-<n>, the log and STATE are
+   not in this set — they change legitimately during the step. hashed under s->dir by name. */
+static int session_guard(const Session *s, char hex[65]) {
+    int n = 2 + (int)s->k;               /* SESSION, OPS, snap-0..snap-(k-1) */
+    const char **roots = malloc((size_t)n * sizeof *roots);
+    const char **paths = malloc((size_t)n * sizeof *paths);
+    char (*names)[24] = malloc((size_t)n * sizeof *names);
+    if (!roots || !paths || !names) { free(roots); free(paths); free(names); return -1; }
+    for (int i = 0; i < n; i++) roots[i] = s->dir;
+    paths[0] = "SESSION";
+    paths[1] = "OPS";
+    for (uint32_t k = 0; k < s->k; k++) {
+        snprintf(names[k], sizeof names[k], "snap-%u", k);
+        paths[2 + k] = names[k];
+    }
+    int rc = tree_hash_roots((const char *const *)roots, (const char *const *)paths, n, hex);
+    free(roots); free(paths); free(names);
+    return rc;
+}
 
 static int board_read(const Session *s, Board *b) {
     const char *m[] = {"main"}, *r[] = {"tests/rom"};
     char tp[1024];
     if (tree_hash(s->root, m, 1, b->main_h) || tree_hash(s->root, r, 1, b->rom_h)) return -1;
+    if (session_guard(s, b->sess_h) != 0) return -1;
     if (path_join(tp, sizeof tp, s->root, TOKEN_REL)) return -1;
     raw_stat(tp, &b->tok);
     raw_stat(getenv("BENCH_TOKEN"), &b->env);
@@ -477,6 +500,7 @@ int frame(Session *s, Op op, Tool tool, void *arg, int k_due) {
         else {
             if (strcmp(pre.main_h, post.main_h)) strcat(moved, "main,");
             if (strcmp(pre.rom_h, post.rom_h)) strcat(moved, "rom,");
+            if (strcmp(pre.sess_h, post.sess_h)) strcat(moved, "sessions,");
             if (!raw_same(&pre.tok, &post.tok) || !raw_same(&pre.env, &post.env)) strcat(moved, "token,");
             size_t ml = strlen(moved);
             if (ml) moved[ml - 1] = 0;

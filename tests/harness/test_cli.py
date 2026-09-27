@@ -1084,6 +1084,30 @@ class TestPostconditions(unittest.TestCase):
         w.tool("h.py", "open('hold/x', 'w').write('x')\n")
         self.assertEqual(w.bench("run", w.script("EXEC tools/h.py\n")).returncode, 0)
 
+    def test_editing_a_prior_snapshot_manifest_disarms(self):
+        # a crowned TEST runs unlanded (no landlock) and as root here — it CAN reach sessions/.
+        # rewriting a prior snapshot's MANIFEST must be caught: moved=sessions, disarm.
+        w = addWorld(self)
+        self.runner(w, "import os\n"
+                       "cur = open('sessions/CURRENT').read().strip()\n"
+                       "d = f'sessions/{cur}/snap-0'\n"
+                       "os.chmod(d, 0o755); os.chmod(d + '/MANIFEST', 0o644)\n"
+                       "open(d + '/MANIFEST', 'a').write('# tamper\\n')")
+        r = w.bench("run", w.script("WAIT 1\nTEST PURE tests/rom/test_isa.py\nWAIT 1\n"))
+        self.assert_tainted(w, r, "sessions")
+
+    def test_editing_a_prior_snapshot_board_disarms(self):
+        # editing a prior snap's stored hold bytes is caught by the session guard too.
+        w = addWorld(self)
+        (w.root / "hold" / "keep.txt").write_text("v1\n")
+        self.runner(w, "import os\n"
+                       "cur = open('sessions/CURRENT').read().strip()\n"
+                       "p = f'sessions/{cur}/snap-1/hold/keep.txt'\n"
+                       "os.chmod(os.path.dirname(p), 0o755); os.chmod(p, 0o644)\n"
+                       "open(p, 'w').write('poison\\n')")
+        r = w.bench("run", w.script("WAIT 1\nTEST PURE tests/rom/test_isa.py\n"))
+        self.assert_tainted(w, r, "sessions")
+
 
 class TestMailbox(unittest.TestCase):
     """bench <-> bench-helper: PING, ARM_OK, FRAME_OK over a unix socket in sessions/<id>/."""
