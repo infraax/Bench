@@ -20,6 +20,13 @@
 #endif
 #define HOLD_QUOTA_CEIL  0xffffffffull   /* a run-time override above this is a usage error */
 
+/* and how many entries (regular files + directories) hold/ may grow by. bytes alone let a
+   tool make 65 536 one-byte files, and every snap would copy them all. same override pattern:
+   --hold-files, BENCH_HOLD_FILES. */
+#ifndef HOLD_QUOTA_FILES
+#define HOLD_QUOTA_FILES 1024u
+#endif
+
 /* same numbering as isa/hotz_isa.py Op. five. there is no sixth. */
 typedef enum { OP_READ=1, OP_WRITE, OP_EXEC, OP_TEST, OP_WAIT } Op;
 
@@ -37,6 +44,8 @@ struct Session {
     uint64_t t0_ns, last_snap_ns;
     uint64_t hold_base;      /* bytes in hold/ at session start; the quota counts growth past it */
     uint64_t hold_quota;     /* frozen at start, like N */
+    uint64_t hold_base_files;   /* entries in hold/ at session start */
+    uint64_t hold_files_quota;  /* frozen at start */
     Gate     gate;           /* KILL, owner token, helper: checked inside frame(), not beside it */
     TokenId  tok;            /* the token that armed this run, pinned; any change disarms */
     int      tainted;        /* a TEST step broke its post-conditions: the run ends disarmed */
@@ -56,7 +65,8 @@ extern volatile sig_atomic_t g_halt;
 
 uint64_t nowns(void);
 int  session_start(Session *s, const char *root, const char *dir,
-                   uint32_t n, uint32_t k, uint32_t ts, uint32_t tt, uint32_t tS, uint64_t hq);
+                   uint32_t n, uint32_t k, uint32_t ts, uint32_t tt, uint32_t tS,
+                   uint64_t hq, uint64_t hf);
 int  frame(Session *s, Op op, Tool tool, void *arg, int k_due);   /* 0 ok, >0 gate stop, -1 fault */
 int  snap(Session *s, const char *why);
 int  session_state(const Session *s, const char *status);
@@ -68,8 +78,9 @@ int  session_state(const Session *s, const char *status);
 int  child_run(const char *root, char *const argv[], Jail jail, char *out, size_t outsz,
                uint64_t *nbytes, uint32_t timeout_ms, int log_fd, int err_fd);
 
-/* bytes in regular files under path (links and devices are not counted, same as snap). */
-int  tree_bytes(const char *path, uint64_t *out);
+/* bytes in regular files, and entries (regular files + dirs), under path — the top itself
+   not counted. links and devices are not board state, same as snap. adds into the outputs. */
+int  tree_count(const char *path, uint64_t *bytes, uint64_t *entries);
 
 int  mkdirs(const char *path);
 int  write_atomic(const char *path, const char *text);

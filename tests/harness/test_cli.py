@@ -731,6 +731,11 @@ def hold_quota():
     return int(re.search(r"#define HOLD_QUOTA_BYTES (\d+)u", hdr).group(1))
 
 
+def hold_files_quota():
+    hdr = (IMAGE / "supervisor" / "frame.h").read_text()
+    return int(re.search(r"#define HOLD_QUOTA_FILES (\d+)u", hdr).group(1))
+
+
 class TestHoldQuota(unittest.TestCase):
     """hold/ may grow by HOLD_QUOTA_BYTES per session. over is a failed step, not a hang."""
 
@@ -806,6 +811,54 @@ class TestHoldQuota(unittest.TestCase):
         self.assertEqual(w.bench("run", w.script("WAIT 1\n")).returncode, 2)
         w.env["BENCH_HOLD_QUOTA"] = ""          # empty env is unset: the default applies
         self.assertEqual(w.bench("run", w.script("WAIT 1\n")).returncode, 0)
+
+    def many(self, w, count, name="many.py"):
+        return w.tool(name, f"import os\nos.makedirs('hold/m', exist_ok=True)\n"
+                            f"for i in range({count}):\n    open(f'hold/m/{{i}}', 'w').close()\n")
+
+    def test_too_many_files_is_a_files_fault(self):
+        # 1025 empty files: zero bytes, over the entry quota.
+        w = addWorld(self)
+        prog = self.many(w, hold_files_quota())
+        r = w.bench("run", w.script(f"EXEC {prog}\n"), timeout=30)
+        self.assertNotEqual(r.returncode, 0, r.stdout)
+        self.assertIn("fault=hold-quota-files", r.stdout)
+        self.assertNotIn("hold-quota-bytes", r.stdout)
+        self.assertIn("tree=skipped:over-quota", (w.snaps()[-1] / "MANIFEST").read_text())
+
+    def test_over_bytes_names_bytes(self):
+        w = addWorld(self)
+        prog = self.writer(w, hold_quota() + 1)
+        r = w.bench("run", w.script(f"EXEC {prog}\n"), timeout=30)
+        self.assertIn("fault=hold-quota-bytes", r.stdout)
+
+    def test_dirs_count_as_entries(self):
+        w = addWorld(self)
+        prog = self.many(w, 2)          # hold/m + 2 files = 3 entries
+        ok = w.bench("run", "--hold-files", "3", w.script(f"EXEC {prog}\n"), timeout=30)
+        self.assertEqual(ok.returncode, 0, ok.stdout)
+        w2 = addWorld(self)
+        prog = self.many(w2, 2)
+        over = w2.bench("run", "--hold-files", "2", w2.script(f"EXEC {prog}\n"), timeout=30)
+        self.assertIn("hold-quota-files grew=3 quota=2", over.stdout)
+
+    def test_files_flag_and_env(self):
+        # the flag lowers or raises the default; kept small so the snap stays inside T_frame.
+        w = addWorld(self)
+        prog = self.many(w, 20)
+        r = w.bench("run", "--hold-files", "21", w.script(f"EXEC {prog}\n"), timeout=30)
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertIn("hold_files_quota=21\n", (w.session() / "SESSION").read_text())
+        w1 = addWorld(self)
+        r = w1.bench("run", "--hold-files", "5", w1.script(f"EXEC {self.many(w1, 20)}\n"), timeout=30)
+        self.assertIn("hold-quota-files", r.stdout)
+        w2 = addWorld(self)
+        w2.env["BENCH_HOLD_FILES"] = "0"
+        r = w2.bench("run", w2.script("WRITE fs hold/a.txt x\n"))
+        self.assertIn("hold-quota-files", r.stdout)
+        w2.env["BENCH_HOLD_FILES"] = "many"
+        self.assertEqual(w2.bench("run", w2.script("WAIT 1\n")).returncode, 2)
+        self.assertEqual(w2.bench("run", "--hold-files", "-1", w2.script("WAIT 1\n")).returncode, 2)
 
     def test_quota_is_frozen_in_session_file(self):
         w = addWorld(self)

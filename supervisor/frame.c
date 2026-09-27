@@ -161,11 +161,12 @@ static int copy_tree(const char *src, const char *dst) {
     return rc;
 }
 
-int tree_bytes(const char *path, uint64_t *out) {
+static int tree_walk(const char *path, uint64_t *bytes, uint64_t *entries, int top) {
     struct stat st;
     if (lstat(path, &st) != 0) return errno == ENOENT ? 0 : -1;
-    if (S_ISREG(st.st_mode)) { *out += (uint64_t)st.st_size; return 0; }
+    if (S_ISREG(st.st_mode)) { *bytes += (uint64_t)st.st_size; *entries += 1; return 0; }
     if (!S_ISDIR(st.st_mode)) return 0;
+    if (!top) *entries += 1;
     DIR *d = opendir(path);
     if (!d) return -1;
     int rc = 0;
@@ -173,16 +174,20 @@ int tree_bytes(const char *path, uint64_t *out) {
     while (rc == 0 && (e = readdir(d)) != NULL) {
         if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, "..")) continue;
         char p[1024];
-        rc = path_join(p, sizeof p, path, e->d_name) ? -1 : tree_bytes(p, out);
+        rc = path_join(p, sizeof p, path, e->d_name) ? -1 : tree_walk(p, bytes, entries, 0);
     }
     closedir(d);
     return rc;
 }
 
-static int hold_bytes(const Session *s, uint64_t *out) {
+int tree_count(const char *path, uint64_t *bytes, uint64_t *entries) {
+    return tree_walk(path, bytes, entries, 1);
+}
+
+static int hold_count(const Session *s, uint64_t *bytes, uint64_t *entries) {
     char p[1024];
-    *out = 0;
-    return path_join(p, sizeof p, s->root, "hold") ? -1 : tree_bytes(p, out);
+    *bytes = *entries = 0;
+    return path_join(p, sizeof p, s->root, "hold") ? -1 : tree_count(p, bytes, entries);
 }
 
 int session_state(const Session *s, const char *status) {
@@ -347,13 +352,18 @@ int frame(Session *s, Op op, Tool tool, void *arg, int k_due) {
 
     /* hold quota: a successful tool that grew hold/ past budget is a failed step. */
     if (rc == 0 && !skip) {
-        uint64_t hb;
-        if (hold_bytes(s, &hb) != 0) {
+        uint64_t hb, hf;
+        if (hold_count(s, &hb, &hf) != 0) {
             snprintf(s->ev, sizeof s->ev, "fault=hold-unreadable");
             rc = 1;
         } else if (hb > s->hold_base && hb - s->hold_base > s->hold_quota) {
-            snprintf(s->ev, sizeof s->ev, "fault=hold-quota grew=%llu quota=%llu",
+            snprintf(s->ev, sizeof s->ev, "fault=hold-quota-bytes grew=%llu quota=%llu",
                      (unsigned long long)(hb - s->hold_base), (unsigned long long)s->hold_quota);
+            rc = 1;
+            skip = "over-quota";
+        } else if (hf > s->hold_base_files && hf - s->hold_base_files > s->hold_files_quota) {
+            snprintf(s->ev, sizeof s->ev, "fault=hold-quota-files grew=%llu quota=%llu",
+                     (unsigned long long)(hf - s->hold_base_files), (unsigned long long)s->hold_files_quota);
             rc = 1;
             skip = "over-quota";
         }
@@ -382,7 +392,8 @@ int frame(Session *s, Op op, Tool tool, void *arg, int k_due) {
 }
 
 int session_start(Session *s, const char *root, const char *dir,
-                  uint32_t n, uint32_t k, uint32_t ts, uint32_t tt, uint32_t tS, uint64_t hq) {
+                  uint32_t n, uint32_t k, uint32_t ts, uint32_t tt, uint32_t tS,
+                  uint64_t hq, uint64_t hf) {
     memset(s, 0, sizeof *s);
     s->n_max = n ? n : N_MAX_DEFAULT;
     s->k_snap = k ? k : 1;
@@ -394,7 +405,8 @@ int session_start(Session *s, const char *root, const char *dir,
     snprintf(s->root, sizeof s->root, "%s", root);
     snprintf(s->dir, sizeof s->dir, "%s", dir);
     s->hold_quota = hq;
-    if (hold_bytes(s, &s->hold_base) != 0) return -1;
+    s->hold_files_quota = hf;
+    if (hold_count(s, &s->hold_base, &s->hold_base_files) != 0) return -1;
 
     /* radio off by default. no eyes, no judge. fs and tty wired. */
     s->bus.plug = (uint8_t)((1u << SLOT_N) - 1);
@@ -410,9 +422,10 @@ int session_start(Session *s, const char *root, const char *dir,
     if (mkdirs(dir) || path_join(path, sizeof path, dir, "SESSION")) return -1;
     snprintf(text, sizeof text,
              "N_max=%u\nK=%u\nT_frame_ms=%u\nT_tool_ms=%u\nT_session_ms=%u\nplug=0x%02x\n"
-             "hold_quota=%llu\nhold_base=%llu\n",
+             "hold_quota=%llu\nhold_base=%llu\nhold_files_quota=%llu\nhold_base_files=%llu\n",
              s->n_max, s->k_snap, s->t_step_ms, s->t_tool_ms, s->t_sess_ms, s->bus.plug,
-             (unsigned long long)s->hold_quota, (unsigned long long)s->hold_base);
+             (unsigned long long)s->hold_quota, (unsigned long long)s->hold_base,
+             (unsigned long long)s->hold_files_quota, (unsigned long long)s->hold_base_files);
     if (write_atomic(path, text)) return -1;
     return snap(s, "s0");
 }

@@ -535,9 +535,10 @@ static int cmd_run(int argc, char **argv) {
     }
     unsigned long n = N_MAX_DEFAULT;
     const char *script = NULL;
-    /* hold quota: --hold-quota beats BENCH_HOLD_QUOTA beats the built-in default. */
-    const char *hq_src = getenv("BENCH_HOLD_QUOTA");
+    /* hold quotas: the flag beats the env beats the built-in default. bytes and entries alike. */
+    const char *hq_src = getenv("BENCH_HOLD_QUOTA"), *hf_src = getenv("BENCH_HOLD_FILES");
     if (hq_src && !*hq_src) hq_src = NULL;
+    if (hf_src && !*hf_src) hf_src = NULL;
     for (int i = 0; i < argc; i++) {
         if (!strcmp(argv[i], "--n") && i + 1 < argc) {
             char *end;
@@ -545,10 +546,12 @@ static int cmd_run(int argc, char **argv) {
             if (*end) n = 0;
         } else if (!strcmp(argv[i], "--hold-quota") && i + 1 < argc) {
             hq_src = argv[++i];
+        } else if (!strcmp(argv[i], "--hold-files") && i + 1 < argc) {
+            hf_src = argv[++i];
         } else if (!script) {
             script = argv[i];
         } else {
-            fprintf(stderr, "usage: bench run [--n N] [--hold-quota BYTES] [script|-]\n");
+            fprintf(stderr, "usage: bench run [--n N] [--hold-quota BYTES] [--hold-files N] [script|-]\n");
             return 2;
         }
     }
@@ -560,6 +563,12 @@ static int cmd_run(int argc, char **argv) {
     if (hq_src && parse_bytes(hq_src, &hold_quota) != 0) {
         fprintf(stderr, "run: hold quota '%.64s' is not a byte count 0..%llu\n",
                 hq_src, (unsigned long long)HOLD_QUOTA_CEIL);
+        return 2;
+    }
+    uint64_t hold_files = HOLD_QUOTA_FILES;
+    if (hf_src && parse_bytes(hf_src, &hold_files) != 0) {
+        fprintf(stderr, "run: hold file quota '%.64s' is not a count 0..%llu\n",
+                hf_src, (unsigned long long)HOLD_QUOTA_CEIL);
         return 2;
     }
 
@@ -634,7 +643,7 @@ static int cmd_run(int argc, char **argv) {
     sigaction(SIGINT, &sa, NULL);
 
     static Session s;
-    if (session_start(&s, g_root, dir, (uint32_t)n, (uint32_t)n, 0, 0, 0, hold_quota)) {
+    if (session_start(&s, g_root, dir, (uint32_t)n, (uint32_t)n, 0, 0, 0, hold_quota, hold_files)) {
         fprintf(stderr, "FAULT session start: snap s0 failed\n");
         return 1;
     }
@@ -759,6 +768,7 @@ int main(int argc, char **argv) {
     if (!strcmp(argv[1], "demo")) return cmd_demo();
     if (!strcmp(argv[1], "snap-ls")) return cmd_snap_ls();
 usage:
-    fprintf(stderr, "usage: bench status | run [--n N] [--hold-quota BYTES] [script|-] | kill | demo | snap-ls\n");
+    fprintf(stderr, "usage: bench status [--line] | run [--n N] [--hold-quota BYTES] [--hold-files N] [script|-]"
+                    " | kill | demo | snap-ls\n");
     return 2;
 }
