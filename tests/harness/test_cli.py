@@ -738,6 +738,80 @@ class TestOpsTable(unittest.TestCase):
                 self.assertNotIn(" MAIN", r.stdout)
 
 
+class TestRetention(unittest.TestCase):
+    """run keeps the newest M session dirs (default 20), counting its own."""
+
+    def fake_sessions(self, w, count):
+        names = [f"{1000000000 + i}-{100 + i}" for i in range(count)]
+        for n in names:
+            (w.root / "sessions" / n).mkdir()
+            (w.root / "sessions" / n / "STATE").write_text("status=ok\n")
+        return names
+
+    def session_dirs(self, w):
+        return sorted(p.name for p in (w.root / "sessions").iterdir()
+                      if p.is_dir() and re.fullmatch(r"\d+-\d+", p.name))
+
+    def test_default_keeps_twenty(self):
+        w = addWorld(self)
+        names = self.fake_sessions(w, 25)
+        self.assertEqual(w.bench("run", w.script("WAIT 1\n")).returncode, 0)
+        left = self.session_dirs(w)
+        self.assertEqual(len(left), 20)
+        self.assertIn(w.session().name, left)
+        self.assertTrue(set(names[-19:]) <= set(left))             # the newest old ones
+        self.assertFalse(set(names[:6]) & set(left))
+        self.assertIn("RETAIN keep=20 removed=6", (w.session() / "log").read_text())
+
+    def test_keep_flag_and_env(self):
+        w = addWorld(self)
+        self.fake_sessions(w, 6)
+        self.assertEqual(w.bench("run", "--keep", "3", w.script("WAIT 1\n")).returncode, 0)
+        self.assertEqual(len(self.session_dirs(w)), 3)
+        prev = w.session().name
+        w.env["BENCH_KEEP"] = "1"
+        self.assertEqual(w.bench("run", w.script("WAIT 1\n")).returncode, 0)
+        # keep=1, but the previous run was CURRENT when pruning ran: it stays (a failed start
+        # must not leave CURRENT pointing at a deleted dir). the next run then prunes it.
+        self.assertEqual(self.session_dirs(w), sorted([prev, w.session().name]))
+        last = w.session().name
+        self.assertEqual(w.bench("run", w.script("WAIT 1\n")).returncode, 0)
+        self.assertEqual(self.session_dirs(w), sorted([last, w.session().name]))
+        for bad in ("0", "x", "-1"):
+            self.assertEqual(w.bench("run", "--keep", bad, w.script("WAIT 1\n")).returncode, 2)
+
+    def test_never_pruned(self):
+        w = addWorld(self)
+        names = self.fake_sessions(w, 5)
+        (w.root / "sessions" / "CURRENT").write_text(names[0] + "\n")     # oldest is CURRENT
+        (w.root / "sessions" / names[1] / "hold.before").mkdir()          # owner's old hold/
+        (w.root / "sessions" / "notes").mkdir()                             # not a session dir
+        (w.root / "sessions" / "e2e-1").mkdir()
+        self.assertEqual(w.bench("run", "--keep", "1", w.script("WAIT 1\n")).returncode, 0)
+        left = set(self.session_dirs(w))
+        self.assertIn(names[0], left)
+        self.assertIn(names[1], left)
+        self.assertFalse({names[2], names[3], names[4]} & left)
+        self.assertTrue((w.root / "sessions" / "notes").is_dir())
+        self.assertTrue((w.root / "sessions" / "e2e-1").is_dir())
+        self.assertTrue(w.token.exists())
+
+    def test_prune_does_not_follow_links(self):
+        w = addWorld(self)
+        names = self.fake_sessions(w, 3)
+        outside = w.root / "outside.txt"
+        outside.write_text("keep me")
+        (w.root / "sessions" / names[0] / "link").symlink_to(outside)
+        self.assertEqual(w.bench("run", "--keep", "1", w.script("WAIT 1\n")).returncode, 0)
+        self.assertEqual(outside.read_text(), "keep me")
+
+    def test_usage_error_prunes_nothing(self):
+        w = addWorld(self)
+        self.fake_sessions(w, 5)
+        self.assertNotEqual(w.bench("run", "--keep", "1", w.script("BROWSE x\n")).returncode, 0)
+        self.assertEqual(len(self.session_dirs(w)), 5)
+
+
 class TestOutFiles(unittest.TestCase):
     """the log is the supervisor's. tool output lives in out-<n>, pinned by the MANIFEST."""
 

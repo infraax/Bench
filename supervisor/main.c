@@ -560,6 +560,86 @@ static int run_gate(Session *s) {
     return 0;
 }
 
+/* ---- retention: sessions/ is a budget too ----
+ * on run start, keep the newest KEEP session dirs, counting the one about to be made.
+ * a session dir is sessions/<epoch>-<pid>; nothing else in sessions/ is touched. never pruned:
+ * the CURRENT session, and any session holding hold.before (the owner's old hold/ from a
+ * restore — bench does not delete the owner's data). removal uses lstat and never follows links. */
+#define KEEP_DEFAULT 20u
+
+static int rm_tree(const char *p) {
+    struct stat st;
+    if (lstat(p, &st) != 0) return errno == ENOENT ? 0 : -1;
+    if (!S_ISDIR(st.st_mode)) return unlink(p);
+    DIR *d = opendir(p);
+    if (!d) return -1;
+    int rc = 0;
+    struct dirent *e;
+    while (rc == 0 && (e = readdir(d)) != NULL) {
+        if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, "..")) continue;
+        char c[1100];
+        rc = path_join(c, sizeof c, p, e->d_name) ? -1 : rm_tree(c);
+    }
+    closedir(d);
+    return rc == 0 ? rmdir(p) : rc;
+}
+
+typedef struct { char name[64]; long long epoch; long long mt; } SessEnt;
+
+static int sess_newest_first(const void *a, const void *b) {
+    const SessEnt *x = a, *y = b;
+    if (x->epoch != y->epoch) return x->epoch < y->epoch ? 1 : -1;
+    if (x->mt != y->mt) return x->mt < y->mt ? 1 : -1;
+    return strcmp(y->name, x->name);
+}
+
+static int is_session_name(const char *n, long long *epoch) {
+    const char *dash = strchr(n, '-');
+    if (!dash || dash == n || !dash[1] || strlen(n) >= 64) return 0;
+    for (const char *c = n; *c; c++) if (c != dash && (*c < '0' || *c > '9')) return 0;
+    *epoch = atoll(n);
+    return 1;
+}
+
+/* returns how many session dirs were removed, -1 on error. */
+static int retain(unsigned keep) {
+    char sdir[1024], cur[128] = "", cdir[1024];
+    if (sessions_path(sdir, sizeof sdir, NULL)) return -1;
+    current_dir(cdir, sizeof cdir, cur, sizeof cur);
+    DIR *d = opendir(sdir);
+    if (!d) return -1;
+    SessEnt *v = NULL;
+    size_t n = 0, cap = 0;
+    struct dirent *e;
+    while ((e = readdir(d)) != NULL) {
+        long long ep;
+        char p[1100];
+        struct stat st;
+        if (!is_session_name(e->d_name, &ep) || path_join(p, sizeof p, sdir, e->d_name) ||
+            lstat(p, &st) != 0 || !S_ISDIR(st.st_mode)) continue;
+        if (n == cap) {
+            cap = cap ? cap * 2 : 64;
+            SessEnt *nv = realloc(v, cap * sizeof *nv);
+            if (!nv) { free(v); closedir(d); return -1; }
+            v = nv;
+        }
+        snprintf(v[n].name, sizeof v[n].name, "%s", e->d_name);
+        v[n].epoch = ep;
+        v[n].mt = (long long)st.st_mtim.tv_sec;
+        n++;
+    }
+    closedir(d);
+    qsort(v, n, sizeof *v, sess_newest_first);
+    int removed = 0;
+    for (size_t i = keep > 0 ? keep - 1 : 0; i < n; i++) {   /* keep-1 old + the new one = keep */
+        char p[1100];
+        if (!strcmp(v[i].name, cur) || path_join(p, sizeof p, sdir, v[i].name) || exists(p, "hold.before")) continue;
+        if (rm_tree(p) == 0) removed++;
+    }
+    free(v);
+    return removed;
+}
+
 /* plain decimal digits, nothing else: no sign, no suffix, no spaces. */
 static int parse_bytes(const char *p, uint64_t *out) {
     if (!*p) return -1;
@@ -586,8 +666,10 @@ static int cmd_run(int argc, char **argv) {
     const char *script = NULL;
     /* hold quotas: the flag beats the env beats the built-in default. bytes and entries alike. */
     const char *hq_src = getenv("BENCH_HOLD_QUOTA"), *hf_src = getenv("BENCH_HOLD_FILES");
+    const char *keep_src = getenv("BENCH_KEEP");
     if (hq_src && !*hq_src) hq_src = NULL;
     if (hf_src && !*hf_src) hf_src = NULL;
+    if (keep_src && !*keep_src) keep_src = NULL;
     for (int i = 0; i < argc; i++) {
         if (!strcmp(argv[i], "--n") && i + 1 < argc) {
             char *end;
@@ -597,10 +679,12 @@ static int cmd_run(int argc, char **argv) {
             hq_src = argv[++i];
         } else if (!strcmp(argv[i], "--hold-files") && i + 1 < argc) {
             hf_src = argv[++i];
+        } else if (!strcmp(argv[i], "--keep") && i + 1 < argc) {
+            keep_src = argv[++i];
         } else if (!script) {
             script = argv[i];
         } else {
-            fprintf(stderr, "usage: bench run [--n N] [--hold-quota BYTES] [--hold-files N] [script|-]\n");
+            fprintf(stderr, "usage: bench run [--n N] [--hold-quota BYTES] [--hold-files N] [--keep M] [script|-]\n");
             return 2;
         }
     }
@@ -612,6 +696,11 @@ static int cmd_run(int argc, char **argv) {
     if (hq_src && parse_bytes(hq_src, &hold_quota) != 0) {
         fprintf(stderr, "run: hold quota '%.64s' is not a byte count 0..%llu\n",
                 hq_src, (unsigned long long)HOLD_QUOTA_CEIL);
+        return 2;
+    }
+    uint64_t keep = KEEP_DEFAULT;
+    if (keep_src && (parse_bytes(keep_src, &keep) != 0 || keep == 0 || keep > 100000)) {
+        fprintf(stderr, "run: keep '%.64s' is not a session count 1..100000\n", keep_src);
         return 2;
     }
     uint64_t hold_files = HOLD_QUOTA_FILES;
@@ -645,6 +734,7 @@ static int cmd_run(int argc, char **argv) {
         if (r == 1 && ++nops > MAX_OPS) { fprintf(stderr, "FAULT line %d: script over %d ops\n", ln, MAX_OPS); return 1; }
     }
     if (f != stdin) fclose(f);
+    int pruned = retain((unsigned)keep);
 
     char id[64], dir[1024], path[1100], sdir[1024];
     snprintf(id, sizeof id, "%lld-%d", (long long)time(NULL), (int)getpid());
@@ -663,6 +753,7 @@ static int cmd_run(int argc, char **argv) {
         fprintf(stderr, "run: %s — fail closed, no frames ran.\n", why);
         return 6;
     }
+    dprintf(g_log, "RETAIN keep=%llu removed=%d\n", (unsigned long long)keep, pruned);
     int arm = mb_ask(&g_mb, "ARM_OK", NULL, r, sizeof r);
     if (arm != 1) {
         fprintf(stderr, "run: helper %s — %s, no frames ran.\n",
