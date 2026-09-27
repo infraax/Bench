@@ -140,24 +140,100 @@ static int copy_file(const char *src, const char *dst) {
     return rc;
 }
 
-/* photograph the board: regular files and dirs. links and devices are not board state. */
-static int copy_tree(const char *src, const char *dst) {
+/* ---- photograph the board, by delta ----
+ * regular files and dirs; links and devices are not board state. a file unchanged since the
+ * previous board snap is hard-linked from THAT snap (never from hold/, which tools may write);
+ * anything else is copied. "unchanged" = same (ino, size, mtime, ctime) as recorded in the
+ * previous snap's INDEX. ctime moves on every write, chmod or utime and cannot be set back by
+ * the owner's uid, so a match means the bytes are the ones that snap already holds.
+ * INDEX: one line per file, "<ino> <size> <mtime.ns> <ctime.ns> <relpath>". a name with a
+ * newline gets no line — it is always copied, and cannot forge an entry for another file. */
+
+typedef struct { char *rel; unsigned long long ino, size; long long ms, mns, cs, cns; } IdxEnt;
+typedef struct { IdxEnt *v; size_t n, cap; } Idx;
+
+static int idx_cmp(const void *a, const void *b) {
+    return strcmp(((const IdxEnt *)a)->rel, ((const IdxEnt *)b)->rel);
+}
+
+static void idx_free(Idx *x) {
+    for (size_t i = 0; i < x->n; i++) free(x->v[i].rel);
+    free(x->v);
+    memset(x, 0, sizeof *x);
+}
+
+static int idx_load(Idx *x, const char *path) {
+    memset(x, 0, sizeof *x);
+    FILE *f = fopen(path, "r");
+    if (!f) return -1;
+    char line[1400];
+    while (fgets(line, sizeof line, f)) {
+        IdxEnt e;
+        int off = 0;
+        line[strcspn(line, "\n")] = 0;
+        if (sscanf(line, "%llu %llu %lld.%lld %lld.%lld %n", &e.ino, &e.size, &e.ms, &e.mns,
+                   &e.cs, &e.cns, &off) != 6 || !off || !line[off]) continue;   /* unreadable = no match */
+        if (x->n == x->cap) {
+            size_t c = x->cap ? x->cap * 2 : 256;
+            IdxEnt *nv = realloc(x->v, c * sizeof *nv);
+            if (!nv) { fclose(f); idx_free(x); return -1; }
+            x->v = nv;
+            x->cap = c;
+        }
+        if (!(e.rel = strdup(line + off))) { fclose(f); idx_free(x); return -1; }
+        x->v[x->n++] = e;
+    }
+    fclose(f);
+    qsort(x->v, x->n, sizeof *x->v, idx_cmp);
+    return 0;
+}
+
+static const IdxEnt *idx_find(const Idx *x, const char *rel) {
+    IdxEnt key = {.rel = (char *)rel};
+    return x->n ? bsearch(&key, x->v, x->n, sizeof *x->v, idx_cmp) : NULL;
+}
+
+typedef struct { const Idx *prev; const char *prev_hold; FILE *index; unsigned linked, copied; } Delta;
+
+static int copy_tree(const char *src, const char *dst, const char *rel, Delta *d) {
     struct stat st;
     if (lstat(src, &st) != 0) return errno == ENOENT ? 0 : -1;
-    if (S_ISREG(st.st_mode)) return copy_file(src, dst);
+    if (S_ISREG(st.st_mode)) {
+        int named = strchr(rel, '\n') == NULL;
+        const IdxEnt *e = named && d->prev ? idx_find(d->prev, rel) : NULL;
+        int done = 0;
+        if (e && e->ino == (unsigned long long)st.st_ino && e->size == (unsigned long long)st.st_size &&
+            e->ms == (long long)st.st_mtim.tv_sec && e->mns == (long long)st.st_mtim.tv_nsec &&
+            e->cs == (long long)st.st_ctim.tv_sec && e->cns == (long long)st.st_ctim.tv_nsec) {
+            char from[1400];
+            if (!path_join(from, sizeof from, d->prev_hold, rel) && link(from, dst) == 0) { d->linked++; done = 1; }
+        }
+        if (!done) {
+            if (copy_file(src, dst) != 0) return -1;
+            d->copied++;
+        }
+        if (named && d->index)
+            fprintf(d->index, "%llu %llu %lld.%09ld %lld.%09ld %s\n", (unsigned long long)st.st_ino,
+                    (unsigned long long)st.st_size, (long long)st.st_mtim.tv_sec, st.st_mtim.tv_nsec,
+                    (long long)st.st_ctim.tv_sec, st.st_ctim.tv_nsec, rel);
+        return 0;
+    }
     if (!S_ISDIR(st.st_mode)) return 0;
     if (mkdir(dst, 0755) != 0 && errno != EEXIST) return -1;
-    DIR *d = opendir(src);
-    if (!d) return -1;
+    DIR *dir = opendir(src);
+    if (!dir) return -1;
     int rc = 0;
     struct dirent *e;
-    while (rc == 0 && (e = readdir(d)) != NULL) {
+    while (rc == 0 && (e = readdir(dir)) != NULL) {
         if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, "..")) continue;
-        char s2[1024], d2[1024];
-        if (path_join(s2, sizeof s2, src, e->d_name) || path_join(d2, sizeof d2, dst, e->d_name)) rc = -1;
-        else rc = copy_tree(s2, d2);
+        char s2[1024], d2[1024], r2[1024];
+        if (path_join(s2, sizeof s2, src, e->d_name) || path_join(d2, sizeof d2, dst, e->d_name) ||
+            (rel[0] ? path_join(r2, sizeof r2, rel, e->d_name)
+                    : (snprintf(r2, sizeof r2, "%s", e->d_name) >= (int)sizeof r2)))
+            rc = -1;
+        else rc = copy_tree(s2, d2, r2, d);
     }
-    closedir(d);
+    closedir(dir);
     return rc;
 }
 
@@ -282,9 +358,30 @@ static int snap_board(Session *s, const char *why, const char *skip) {
 
     char src[1024], dst[1100];
     if (path_join(src, sizeof src, s->root, "hold") || path_join(dst, sizeof dst, tmp, "hold")) return -1;
-    if (board && copy_tree(src, dst) != 0) return -1;
+    if (board) {
+        Idx prev = {0};
+        char pdir[1100], ppath[1200], phold[1200], ipath[1200];
+        Delta d = {0};
+        if (s->prev_board >= 0) {
+            snprintf(pdir, sizeof pdir, "%s/snap-%d", s->dir, s->prev_board);
+            snprintf(ppath, sizeof ppath, "%s/INDEX", pdir);
+            snprintf(phold, sizeof phold, "%s/hold", pdir);
+            if (idx_load(&prev, ppath) == 0) { d.prev = &prev; d.prev_hold = phold; }
+        }
+        snprintf(ipath, sizeof ipath, "%s/INDEX", tmp);
+        d.index = fopen(ipath, "w");
+        int bad = !d.index || copy_tree(src, dst, "", &d) != 0;
+        if (d.index && fclose(d.index) != 0) bad = 1;
+        idx_free(&prev);
+        if (bad) return -1;
+        FILE *mf = fopen(path, "a");     /* path is still the MANIFEST */
+        if (!mf) return -1;
+        fprintf(mf, "delta=linked:%u copied:%u\n", d.linked, d.copied);
+        if (fclose(mf) != 0) return -1;
+    }
 
     if (rename(tmp, fin) != 0) return -1;
+    if (board) s->prev_board = (int)k;
     s->k = k + 1;
     memcpy(s->snap_id, id, sizeof id);
     s->last_snap_ns = nowns();
@@ -395,6 +492,7 @@ int session_start(Session *s, const char *root, const char *dir,
                   uint32_t n, uint32_t k, uint32_t ts, uint32_t tt, uint32_t tS,
                   uint64_t hq, uint64_t hf) {
     memset(s, 0, sizeof *s);
+    s->prev_board = -1;
     s->n_max = n ? n : N_MAX_DEFAULT;
     s->k_snap = k ? k : 1;
     /* snap is a C hash now, so the frame is tens of ms again, not five seconds. */

@@ -51,6 +51,7 @@ struct Session {
     int      tainted;        /* a TEST step broke its post-conditions: the run ends disarmed */
     Bus      bus;            /* woz bits — lamps live here, we do not keep a second copy */
     uint32_t k;              /* next snap index: snap-<k>/ */
+    int      prev_board;     /* index of the last snap that holds a board (-1: none) — delta source */
     char     snap_id[24];
     char     ev[256];        /* evidence ticket of the current step; lands in the next MANIFEST */
     char     out[128];       /* the step's out-<n> file: name, bytes, sha256. MANIFEST out= */

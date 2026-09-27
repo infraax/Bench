@@ -527,6 +527,88 @@ class TestStatusLine(unittest.TestCase):
         self.assertEqual(w.bench("status", "--json").returncode, 2)
 
 
+from hash import tree_hash  # noqa: E402  (tools/hash.py: same bytes as the C tree hash)
+
+
+class TestDeltaSnaps(unittest.TestCase):
+    """an unchanged hold/ file is hard-linked from the previous snap; the snap is still the board."""
+
+    def world_with(self, count):
+        w = addWorld(self)
+        (w.root / "hold" / "m").mkdir()
+        for i in range(count):
+            (w.root / "hold" / "m" / str(i)).write_text(f"file {i}\n")
+        return w
+
+    def delta(self, snap):
+        man = (snap / "MANIFEST").read_text()
+        m = re.search(r"delta=linked:(\d+) copied:(\d+)", man)
+        return int(m[1]), int(m[2])
+
+    def assert_snaps_are_the_board(self, w):
+        # each board snap's hold/, with main/, hashes to the MANIFEST tree= (main/ is read-only).
+        for snap in w.snaps():
+            man = (snap / "MANIFEST").read_text()
+            tree = re.search(r"^tree=(\S+)$", man, re.M)[1]
+            if tree.startswith("skipped:"):
+                continue
+            base = Path(tempfile.mkdtemp(prefix="bench-snapcheck-"))
+            self.addCleanup(shutil.rmtree, base, ignore_errors=True)
+            shutil.copytree(w.root / "main", base / "main")
+            if (snap / "hold").exists():
+                shutil.copytree(snap / "hold", base / "hold")
+            self.assertEqual(tree_hash(["main", "hold"], base), tree, snap.name)
+
+    def test_unchanged_files_are_linked(self):
+        w = self.world_with(300)
+        r = w.bench("run", w.script("WAIT 1\nWAIT 1\n"))
+        self.assertEqual(r.returncode, 0, r.stdout)
+        s0, s1, s2 = w.snaps()
+        self.assertEqual(self.delta(s0), (0, 300))
+        self.assertEqual(self.delta(s1), (300, 0))
+        self.assertEqual((s0 / "hold/m/5").stat().st_ino, (s2 / "hold/m/5").stat().st_ino)
+        self.assert_snaps_are_the_board(w)
+
+    def test_changed_file_is_copied_even_with_mtime_put_back(self):
+        # same size, mtime restored: ctime still moved, so the snap copies the new bytes.
+        w = self.world_with(20)
+        w.tool("edit.py", "import os\np = 'hold/m/3'\nst = os.stat(p)\n"
+                          "open(p, 'r+').write('FILE 3')\n"
+                          "os.utime(p, ns=(st.st_atime_ns, st.st_mtime_ns))\n")
+        r = w.bench("run", w.script("EXEC tools/edit.py\nWAIT 1\n"))
+        self.assertEqual(r.returncode, 0, r.stdout)
+        s0, s1, s2 = w.snaps()
+        self.assertEqual(self.delta(s1), (19, 1))
+        self.assertEqual((s1 / "hold/m/3").read_text(), "FILE 3\n")
+        self.assertEqual((s0 / "hold/m/3").read_text(), "file 3\n")      # the old snap kept its bytes
+        self.assertNotEqual((s0 / "hold/m/3").stat().st_ino, (s1 / "hold/m/3").stat().st_ino)
+        self.assert_snaps_are_the_board(w)
+
+    def test_new_and_removed_files(self):
+        w = self.world_with(5)
+        r = w.bench("run", w.script("WRITE fs hold/m/new.txt fresh\nWAIT 1\n"))
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertEqual(self.delta(w.snaps()[1]), (5, 1))
+        self.assert_snaps_are_the_board(w)
+
+    def test_a_name_with_a_newline_is_always_copied(self):
+        w = self.world_with(2)
+        w.tool("nl.py", "open('hold/m/a\\nb', 'w').write('x')\n")
+        r = w.bench("run", w.script("EXEC tools/nl.py\nWAIT 1\n"))
+        self.assertEqual(r.returncode, 0, r.stdout)
+        s2 = w.snaps()[2]
+        self.assertEqual(self.delta(s2), (2, 1))
+        self.assertNotIn("a\nb", (s2 / "INDEX").read_text())
+        self.assert_snaps_are_the_board(w)
+
+    def test_a_thousand_files_fit_the_frame(self):
+        # the case that faulted T_frame before delta snaps: 1000 files already in hold/.
+        w = self.world_with(1000)
+        r = w.bench("run", w.script("WAIT 1\nWAIT 1\nWAIT 1\n"), timeout=60)
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertEqual(self.delta(w.snaps()[-1]), (1000, 0))
+
+
 class TestOutFiles(unittest.TestCase):
     """the log is the supervisor's. tool output lives in out-<n>, pinned by the MANIFEST."""
 
