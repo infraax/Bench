@@ -242,6 +242,33 @@ int copy_board(const char *src, const char *dst) {
     return copy_tree(src, dst, "", &d);
 }
 
+/* freeze a finished snapshot on disk: every regular file 0444, every dir 0555, post-order.
+ * a snap holds its own inodes (the first capture copies; later snaps hard-link those copies),
+ * never the live hold/ inode, so this never touches the working tree. the point is the shared
+ * inode: at 0444 an in-place write through ANY hard link to it faults EACCES, so one snap can
+ * no longer mutate the boards of every snap that links the same bytes. a same-uid actor can
+ * chmod it back, but that is now an explicit act, and the TEST post-conditions hash the
+ * session's snaps besides. links and devices are not board state and are left alone. */
+static int seal(const char *path) {
+    struct stat st;
+    if (lstat(path, &st) != 0) return -1;
+    if (S_ISDIR(st.st_mode)) {
+        DIR *d = opendir(path);
+        if (!d) return -1;
+        int rc = 0;
+        struct dirent *e;
+        while (rc == 0 && (e = readdir(d)) != NULL) {
+            if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, "..")) continue;
+            char c[1400];
+            rc = path_join(c, sizeof c, path, e->d_name) ? -1 : seal(c);
+        }
+        closedir(d);
+        return rc ? rc : (chmod(path, 0555) != 0 ? -1 : 0);
+    }
+    if (S_ISREG(st.st_mode)) return chmod(path, 0444) != 0 ? -1 : 0;
+    return 0;   /* a link or device is not board state */
+}
+
 static int tree_walk(const char *path, uint64_t *bytes, uint64_t *entries, int top) {
     struct stat st;
     if (lstat(path, &st) != 0) return errno == ENOENT ? 0 : -1;
@@ -386,6 +413,7 @@ static int snap_board(Session *s, const char *why, const char *skip) {
     }
 
     if (rename(tmp, fin) != 0) return -1;
+    if (seal(fin) != 0) return -1;   /* frozen evidence: read-only to everyone, incl. the owner */
     if (board) s->prev_board = (int)k;
     s->k = k + 1;
     memcpy(s->snap_id, id, sizeof id);

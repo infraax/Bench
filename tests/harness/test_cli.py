@@ -11,6 +11,7 @@ import hashlib
 import os
 import re
 import shutil
+import stat
 import socket
 import subprocess
 import sys
@@ -98,9 +99,24 @@ class World:
         return dict(line.split("=", 1) for line in text.splitlines() if "=" in line)
 
 
+def rmtree_force(path):
+    # snaps are sealed read-only (dirs 0555); restore write so the temp world can be removed.
+    def fix(func, p, exc):     # (function, path, exc) — matches onexc (3.12+) and onerror (older)
+        try:
+            os.chmod(p, 0o700)
+            func(p)
+        except OSError:
+            pass
+    arg = "onexc" if sys.version_info >= (3, 12) else "onerror"
+    try:
+        shutil.rmtree(path, **{arg: fix})
+    except OSError:
+        pass
+
+
 def addWorld(case):
     w = World()
-    case.addCleanup(shutil.rmtree, w.root, ignore_errors=True)
+    case.addCleanup(rmtree_force, w.root)
     return w
 
 
@@ -274,10 +290,13 @@ class TestBoard(unittest.TestCase):
 
     def test_replacing_the_token_stops_the_next_frame(self):
         # a different file at the same path is not the token that armed this run.
+        # replace atomically (write temp, rename onto the path) so the gate never sees a gap:
+        # the file is always present, only its identity (ino) changes -> "changed since arm".
         w = addWorld(self)
         proc = self.start(w, "WAIT 400\n" * 6)
-        w.disarm()
-        w.arm()
+        tmp = w.token.with_suffix(".new")
+        tmp.write_text("")
+        os.replace(tmp, w.token)
         out, _ = proc.communicate(timeout=15)
         self.assertEqual(proc.returncode, 5, out)
         self.assertIn("changed since arm", out)
@@ -530,6 +549,78 @@ class TestStatusLine(unittest.TestCase):
 from hash import tree_hash  # noqa: E402  (tools/hash.py: same bytes as the C tree hash)
 
 
+NOBODY = 65534
+
+
+def write_as_nobody(path):
+    """try to open path for writing after dropping to an unprivileged uid, in a child.
+    returns 'denied' (PermissionError), 'wrote' (succeeded), or 'skip' (cannot drop)."""
+    r, wfd = os.pipe()
+    pid = os.fork()
+    if pid == 0:
+        os.close(r)
+        try:
+            os.setgroups([]); os.setgid(NOBODY); os.setuid(NOBODY)
+        except OSError:
+            os.write(wfd, b"skip"); os._exit(0)
+        try:
+            with open(path, "r+") as f:
+                f.write("x")
+            os.write(wfd, b"wrote")
+        except PermissionError:
+            os.write(wfd, b"denied")
+        except OSError:
+            os.write(wfd, b"denied")
+        os._exit(0)
+    os.close(wfd)
+    out = os.read(r, 16).decode()
+    os.close(r)
+    os.waitpid(pid, 0)
+    return out
+
+
+class TestSealing(unittest.TestCase):
+    """a finished snapshot is sealed read-only on disk: files 0444, dirs 0555. mode bits stop
+    every non-root writer (the intended deployment). Root ignores them — the absolute guarantee
+    is the content hash checked by `bench verify` (see TestVerify)."""
+
+    def test_snap_tree_is_read_only(self):
+        w = addWorld(self)
+        (w.root / "hold" / "keep.txt").write_text("base\n")
+        self.assertEqual(w.bench("run", w.script("WAIT 1\n")).returncode, 0)
+        snap = w.snaps()[-1]
+        self.assertEqual(stat.S_IMODE((snap / "hold").stat().st_mode), 0o555)
+        self.assertEqual(stat.S_IMODE((snap / "hold" / "keep.txt").stat().st_mode), 0o444)
+        self.assertEqual(stat.S_IMODE((snap / "MANIFEST").stat().st_mode), 0o444)
+
+    def test_a_non_root_actor_cannot_write_a_shared_inode(self):
+        # keep.txt is unchanged across three steps, so snap-1 and snap-2 hard-link snap-0's copy.
+        w = addWorld(self)
+        (w.root / "hold" / "keep.txt").write_text("frozen\n")
+        self.assertEqual(w.bench("run", w.script("WAIT 1\nWAIT 1\n")).returncode, 0)
+        s0, s1, s2 = (snap / "hold" / "keep.txt" for snap in w.snaps())
+        self.assertEqual(s0.stat().st_ino, s2.stat().st_ino)      # one inode, three links
+        self.assertGreaterEqual(s0.stat().st_nlink, 3)
+        for link in (s0, s1, s2):                                  # no link is a writable door in
+            outcome = write_as_nobody(link)
+            if outcome == "skip":
+                self.skipTest("cannot drop privileges to test non-root denial")
+            self.assertEqual(outcome, "denied", f"a non-root write to {link} was not denied")
+        self.assertEqual(s0.read_text(), "frozen\n")
+
+    def test_restore_and_retention_still_work_on_sealed_snaps(self):
+        w = addWorld(self)
+        (w.root / "hold" / "keep.txt").write_text("v1\n")
+        self.assertEqual(w.bench("run", w.script("WRITE fs hold/keep.txt v2\n")).returncode, 0)
+        old = w.session().name
+        self.assertEqual(w.bench("restore", f"{old}/snap-0").returncode, 0)   # reads sealed snap
+        self.assertEqual((w.root / "hold" / "keep.txt").read_text(), "v1\n")
+        # retention must be able to delete a sealed snap tree
+        r = w.bench("run", "--keep", "1", w.script("WAIT 1\n"))
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertFalse((w.root / "sessions" / old).exists())
+
+
 class TestDeltaSnaps(unittest.TestCase):
     """an unchanged hold/ file is hard-linked from the previous snap; the snap is still the board."""
 
@@ -645,7 +736,10 @@ class TestRestore(unittest.TestCase):
 
     def test_damaged_snap_moves_nothing(self):
         w, _ = self.two_writes()
-        (w.session() / "snap-1" / "hold" / "a.txt").write_text("forged\n")
+        victim = w.session() / "snap-1" / "hold" / "a.txt"
+        os.chmod(w.session() / "snap-1" / "hold", 0o700)   # sealed: an attacker must unseal first
+        victim.chmod(0o600)
+        victim.write_text("forged\n")
         r = w.bench("restore", "snap-1")
         self.assertEqual(r.returncode, 1, r.stdout)
         self.assertIn("does not hash", r.stdout)

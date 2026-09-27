@@ -571,6 +571,9 @@ static int rm_tree(const char *p) {
     struct stat st;
     if (lstat(p, &st) != 0) return errno == ENOENT ? 0 : -1;
     if (!S_ISDIR(st.st_mode)) return unlink(p);
+    /* sealed snaps are 0555; our uid may restore write to remove them (unlink needs write on
+       the parent dir). this is the only path that unseals, and it only does so to delete. */
+    chmod(p, 0700);
     DIR *d = opendir(p);
     if (!d) return -1;
     int rc = 0;
