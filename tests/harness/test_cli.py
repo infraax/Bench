@@ -231,6 +231,51 @@ class TestBoard(unittest.TestCase):
         self.assertEqual(w.state()["status"], "halt")
         self.assertLess(int(w.state()["n"]), 6)
 
+    def start(self, w, script):
+        proc = subprocess.Popen([str(BENCH), "run", w.script(script)], cwd=IMAGE, env=w.env,
+                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        self.addCleanup(lambda: proc.poll() is None and proc.kill())
+        deadline = time.monotonic() + 15
+        while time.monotonic() < deadline:
+            if (w.root / "sessions" / "CURRENT").exists() and (w.session() / "snap-1").exists():
+                return proc
+            time.sleep(0.02)
+        self.fail("session never reached snap-1")
+
+    def test_kill_reaches_a_running_child(self):
+        # KILL must not wait out T_tool: the child is killed at once, the step is snapped, then stop.
+        w = addWorld(self)
+        w.tool("slow.py", "import time\ntime.sleep(4)\nopen('hold/done', 'w').write('x')\n")
+        proc = self.start(w, "WAIT 1\nEXEC tools/slow.py\nWAIT 1\n")
+        time.sleep(0.5)                      # the child is up and sleeping
+        t0 = time.monotonic()
+        self.assertEqual(w.bench("kill").returncode, 0)
+        out, _ = proc.communicate(timeout=15)
+        self.assertLess(time.monotonic() - t0, 2.0, "supervisor waited out the child after KILL")
+        self.assertEqual(proc.returncode, 3, out)
+        self.assertEqual(w.state()["status"], "halt")
+        self.assertFalse((w.root / "hold" / "done").exists())
+        self.assertIn("halt op=exec", (w.snaps()[-1] / "MANIFEST").read_text())
+        self.assertEqual(w.state()["n"], "2")   # WAIT, EXEC (cut). the last WAIT never ran.
+
+    def test_removing_the_token_stops_the_next_frame(self):
+        w = addWorld(self)
+        proc = self.start(w, "WAIT 400\n" * 6)
+        w.disarm()
+        out, _ = proc.communicate(timeout=15)
+        self.assertEqual(proc.returncode, 5, out)
+        self.assertIn("disarmed", out)
+        self.assertEqual(w.state()["status"], "disarmed")
+        self.assertLess(int(w.state()["n"]), 6)
+        self.assertNotIn("MAIN", out)
+
+    def test_wait_evidence_says_what_was_slept(self):
+        w = addWorld(self)
+        self.assertEqual(w.bench("run", w.script("WAIT 20\n")).returncode, 0)
+        man = (w.snaps()[-1] / "MANIFEST").read_text()
+        slept = int(re.search(r"slept=(\d+)", man).group(1))
+        self.assertGreaterEqual(slept, 20)
+
     def test_demo_green(self):
         w = addWorld(self)
         r = w.bench("demo")
@@ -343,7 +388,11 @@ class TestHoldQuota(unittest.TestCase):
         st = w.state()
         self.assertEqual((st["status"], st["n"]), ("fault", "1"))   # WAIT never ran
         self.assertEqual(len(w.snaps()), 2)                          # the failed step was snapped
-        self.assertIn("fault=hold-quota", (w.snaps()[-1] / "MANIFEST").read_text())
+        man = (w.snaps()[-1] / "MANIFEST").read_text()
+        self.assertIn("fault=hold-quota", man)
+        # ...but not its oversized board: evidence yes, a copy of the thing the quota refused, no.
+        self.assertIn("tree=skipped:over-quota", man)
+        self.assertFalse((w.snaps()[-1] / "hold" / "fill.bin").exists())
 
     def test_at_quota_is_legal(self):
         w = addWorld(self)

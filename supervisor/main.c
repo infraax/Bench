@@ -44,7 +44,6 @@ typedef struct {
     uint32_t ms;
 } Instr;
 
-static volatile sig_atomic_t g_halt;
 static int g_log = -1;
 static const char *g_root = ".";
 
@@ -236,6 +235,7 @@ static int t_exec(Session *s, void *arg) {
     dprintf(g_log, "EXEC %s %s\n", in->slot, in->rest);
     int rc = child_run(s->root, argv, JAIL_FULL, NULL, 0, &nb, s->t_tool_ms, g_log, g_log);
     if (rc == -2) return ev(s, 1, "knife op=exec prog=%s timeout>%ums", in->slot, s->t_tool_ms);
+    if (rc == -3) return ev(s, 1, "halt op=exec prog=%s child killed", in->slot);
     if (nb > s->bus.cap[SLOT_TTY]) return ev(s, 1, "leash op=exec out=%llu>%u", (unsigned long long)nb, s->bus.cap[SLOT_TTY]);
     return ev(s, rc != 0, "op=exec kind=none slot=%s rc=%d out=%llu dirty=0", in->slot, rc, (unsigned long long)nb);
 }
@@ -258,6 +258,7 @@ static int t_test(Session *s, void *arg) {
     int rc = child_run(s->root, argv, JAIL_NET_ONLY, out, sizeof out, NULL, s->t_tool_ms, g_log, g_log);
     out[strcspn(out, "\r\n")] = 0;
     if (rc == -2) return ev(s, 1, "knife op=test path=%s timeout>%ums", in->path, s->t_tool_ms);
+    if (rc == -3) return ev(s, 1, "halt op=test path=%s child killed", in->path);
     return ev(s, rc != 0, "op=test kind=%s slot=fs path=%s rc=%d result=\"%s\" dirty=0",
               !strcmp(in->slot, "PURE") ? "pure" : "scalar", in->path, rc, out);
 }
@@ -265,9 +266,12 @@ static int t_test(Session *s, void *arg) {
 static int t_wait(Session *s, void *arg) {
     Instr *in = arg;
     if (in->ms > s->t_tool_ms) return ev(s, 1, "op=wait ms=%u > T_tool=%u", in->ms, s->t_tool_ms);
-    struct timespec ts = {(time_t)(in->ms / 1000), (long)(in->ms % 1000) * 1000000L};
-    nanosleep(&ts, NULL);
-    return ev(s, 0, "op=wait kind=none ms=%u dirty=0", in->ms);
+    struct timespec ts = {(time_t)(in->ms / 1000), (long)(in->ms % 1000) * 1000000L}, rem;
+    uint64_t t0 = nowns();
+    /* a stray signal resumes the sleep; a halt ends it. evidence says what was slept. */
+    while (nanosleep(&ts, &rem) != 0 && errno == EINTR && !g_halt) ts = rem;
+    unsigned long long slept = (nowns() - t0) / 1000000ull;
+    return ev(s, 0, "op=wait kind=none ms=%u slept=%llu%s dirty=0", in->ms, slept, g_halt ? " halted" : "");
 }
 
 static const Tool TOOL[] = {NULL, t_read, t_write, t_exec, t_test, t_wait};
@@ -410,6 +414,13 @@ static void fmt_instr(const Instr *in, char *out, size_t n) {
     }
 }
 
+/* the frame's gate. KILL first (the owner's hand), then the owner's token. */
+static int run_gate(Session *s) {
+    if (g_halt || exists(s->dir, "KILL")) return ev(s, 3, "halt=kill");
+    if (!armed()) return ev(s, 5, "halt=disarmed owner token gone");
+    return 0;
+}
+
 /* plain decimal digits, nothing else: no sign, no suffix, no spaces. */
 static int parse_bytes(const char *p, uint64_t *out) {
     if (!*p) return -1;
@@ -508,10 +519,10 @@ static int cmd_run(int argc, char **argv) {
         fprintf(stderr, "FAULT session start: snap s0 failed\n");
         return 1;
     }
+    s.gate = run_gate;
 
     int rc = 0;
     for (int i = 0; i < nops; i++) {
-        if (g_halt || exists(dir, "KILL")) { session_state(&s, "halt"); rc = 3; break; }
         if (s.n >= s.n_max) {
             /* the edge, before the work: N is a budget, not a suggestion */
             ev(&s, 1, "fault=over-N n=%u N=%u", s.n, s.n_max);
@@ -525,7 +536,20 @@ static int cmd_run(int argc, char **argv) {
         s.ev[0] = 0;
         int k_due = ((s.n + 1) % s.k_snap) == 0;
         int fr = frame(&s, prog[i].op, TOOL[prog[i].op], &prog[i], k_due);
+        if (fr > 0) {
+            /* stopped at the gate: this op never ran and has no snap */
+            session_state(&s, fr == 3 ? "halt" : fr == 5 ? "disarmed" : "fault");
+            fprintf(stderr, "HALT line %d: %s\n", prog[i].line, s.ev);
+            rc = fr;
+            break;
+        }
         printf("frame %u %-5s snap=%s %s\n", s.n, OP_NAME[prog[i].op], s.snap_id, fr ? "FAULT" : "ok");
+        if (g_halt) {
+            /* KILL landed during the step: it was snapped; nothing after it runs */
+            session_state(&s, "halt");
+            rc = 3;
+            break;
+        }
         if (fr != 0) {
             session_state(&s, "fault");
             fprintf(stderr, "FAULT line %d: %s\n", prog[i].line, s.ev);

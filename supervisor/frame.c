@@ -12,6 +12,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <signal.h>
+#include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -23,7 +24,9 @@
 #include "frame.h"
 #include "sha256.h"
 
-/* one clock. escape and slowness are both measured on the monotonic line;
+volatile sig_atomic_t g_halt;
+
+/* one clock. overrun and slowness are both measured on the monotonic line;
    a wall-clock warp (settimeofday) must not move a budget. */
 uint64_t nowns(void) {
     struct timespec t;
@@ -101,14 +104,15 @@ int child_run(const char *root, char *const argv[], Jail jail, char *out, size_t
         if (r == 0) eof = 1;
         if (!done && waitpid(pid, &st, WNOHANG) == pid) done = 1;
         if (done && eof) break;
-        if ((nowns() - t0) / 1000000ull > timeout_ms) {
-            /* the knife */
+        int late = (nowns() - t0) / 1000000ull > timeout_ms;
+        if (late || g_halt) {
+            /* the knife: on timeout, and on KILL — no child outlives the halt by T_tool */
             kill(pid, SIGKILL);
             if (!done) waitpid(pid, &st, 0);
             close(p[0]);
             if (out) out[used] = 0;
             if (nbytes) *nbytes = total;
-            return -2;
+            return late ? -2 : -3;
         }
         struct timespec ts = {0, 1000000};
         nanosleep(&ts, NULL);
@@ -194,12 +198,14 @@ int session_state(const Session *s, const char *status) {
 
 /* always snapshot, then decide if that snap is worth keeping on a cadence.
    skipping the write because "nothing changed" is how hidden state is born.
-   hash tree -> manifest -> atomic rename. */
-int snap(Session *s, const char *why) {
-    char hash[65] = "", tmp[1024], fin[1024], name[64], path[1100], man[1024];
+   hash tree -> manifest -> atomic rename.
+   board=0 is for a step that broke the hold quota: the manifest and evidence are written,
+   the oversized board is not hashed or copied. the last good board is the snap before. */
+static int snap_board(Session *s, const char *why, int board) {
+    char hash[65] = "skipped:over-quota", tmp[1024], fin[1024], name[64], path[1100], man[1024];
     /* hash the board in C. no interpreter boot inside the frame. */
     const char *paths[] = {"main", "hold"};
-    if (tree_hash(s->root, paths, 2, hash) != 0) return -1;
+    if (board && tree_hash(s->root, paths, 2, hash) != 0) return -1;
 
     uint32_t k = s->k;
     snprintf(name, sizeof name, "snap-%u", k);
@@ -220,7 +226,7 @@ int snap(Session *s, const char *why) {
 
     char src[1024], dst[1100];
     if (path_join(src, sizeof src, s->root, "hold") || path_join(dst, sizeof dst, tmp, "hold")) return -1;
-    if (copy_tree(src, dst) != 0) return -1;
+    if (board && copy_tree(src, dst) != 0) return -1;
 
     if (rename(tmp, fin) != 0) return -1;
     s->k = k + 1;
@@ -229,18 +235,41 @@ int snap(Session *s, const char *why) {
     return session_state(s, "run");
 }
 
+int snap(Session *s, const char *why) { return snap_board(s, why, 1); }
+
+/* append a fault reason to the evidence line, after the tool's own words. */
+static int fault(Session *s, const char *fmt, ...) {
+    size_t l = strlen(s->ev);
+    char why[96];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(why, sizeof why, fmt, ap);
+    va_end(ap);
+    snprintf(s->ev + l, sizeof s->ev - l, " %s", why);
+    s->bus.lamps = lamp_set(s->bus.lamps, LAMP_HOLD);
+    return -1;
+}
+
 /* one frame. intern op already parsed and checked upstairs.
+   gate -> tool -> quota -> snap -> inhibit. the gate runs first: a stop there is no step.
    two clocks: the tool child has already spent T_tool inside child_run (its own knife);
-   here we measure only the C thread's own work (snap + bookkeeping) against T_frame,
-   and the whole session against T_session. python boot is not the frame.
-   return: 0 ok, 1 halt, -1 fault. */
+   T_frame is the C thread's own work — gate, quota walk, snap, bookkeeping — and nothing
+   else owns it. the whole session is measured against T_session. python boot is not the frame.
+   return: 0 ok, >0 stopped at the gate (the exit code), -1 fault (snapped, then stopped). */
 int frame(Session *s, Op op, Tool tool, void *arg, int k_due) {
-    uint64_t tool_t0 = nowns();
-    int rc = 0;
+    uint64_t g0 = nowns();
+    if (s->gate) {
+        int g = s->gate(s);
+        if (g > 0) return g;
+    }
+    uint64_t gate_ns = nowns() - g0;
+    int rc = 0, over_quota = 0;
 
     /* do always. the tool is a child with its own timeout; that time is not the frame. */
+    uint64_t tool_t0 = nowns();
     if (tool) rc = tool(s, arg);
     uint64_t tool_ms = (nowns() - tool_t0) / 1000000ull;
+    uint64_t c0 = nowns() - gate_ns;   /* T_frame: the gate's time counts, the tool's does not */
 
     /* hold quota: a successful tool that grew hold/ past budget is a failed step. */
     if (rc == 0) {
@@ -252,26 +281,28 @@ int frame(Session *s, Op op, Tool tool, void *arg, int k_due) {
             snprintf(s->ev, sizeof s->ev, "fault=hold-quota grew=%llu quota=%llu",
                      (unsigned long long)(hb - s->hold_base), (unsigned long long)s->hold_quota);
             rc = 1;
+            over_quota = 1;
         }
     }
 
-    uint64_t c0 = nowns();   /* the C thread's own work starts here */
     size_t l = strlen(s->ev);
     snprintf(s->ev + l, sizeof s->ev - l, " tool_ms=%llu", (unsigned long long)tool_ms);
     s->n++;
-    if (snap(s, "step") != 0) {
+    if (snap_board(s, "step", !over_quota) != 0) {
         /* no snapshot, no step. worst-case: n does not advance on a missed frame. */
         s->n--;
-        s->bus.lamps = lamp_set(s->bus.lamps, LAMP_HOLD);
-        return -1;
+        return fault(s, "fault=snap n=%u", s->n);
     }
 
     /* then inhibit */
     if (rc != 0) { s->bus.lamps = lamp_set(s->bus.lamps, LAMP_HOLD); return -1; }
-    if ((nowns() - c0) / 1000000ull > s->t_step_ms) return -1;              /* T_frame */
-    if ((nowns() - s->t0_ns) / 1000000ull > s->t_sess_ms) return -1;       /* T_session */
-    if (s->n > s->n_max) return -1;
-    if (k_due && snap(s, "K") != 0) return -1;
+    uint64_t c_ms = (nowns() - c0) / 1000000ull, t_ms = (nowns() - s->t0_ns) / 1000000ull;
+    if (c_ms > s->t_step_ms)
+        return fault(s, "fault=T_frame ms=%llu>%u", (unsigned long long)c_ms, s->t_step_ms);
+    if (t_ms > s->t_sess_ms)
+        return fault(s, "fault=T_session ms=%llu>%u", (unsigned long long)t_ms, s->t_sess_ms);
+    if (s->n > s->n_max) return fault(s, "fault=over-N n=%u>%u", s->n, s->n_max);
+    if (k_due && snap(s, "K") != 0) return fault(s, "fault=snap-K n=%u", s->n);
     (void)op;
     return 0;
 }
