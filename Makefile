@@ -25,7 +25,8 @@ $(ROMH): supervisor/romhash $(ROM_FILES)
 	@printf '#define ROM_HASH "%s"\n' "$$(./supervisor/romhash .)" >> $@
 	@echo "crowned ROM: $$(./supervisor/romhash .)"
 
-supervisor/bench: $(BENCH_SRC) $(HDR) $(ROMH)
+# bench fails closed without its helper, so building one builds both.
+supervisor/bench: $(BENCH_SRC) $(HDR) $(ROMH) | supervisor/bench-helper
 	$(CC) $(CFLAGS) -o $@ $(BENCH_SRC)
 
 # the bus, exhaustively: every lamp byte x bit, every plug byte x pull. C, no python.
