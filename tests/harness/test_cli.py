@@ -720,6 +720,24 @@ class TestDemo(unittest.TestCase):
         self.assertIn("already running", r.stdout)
 
 
+class TestOpsTable(unittest.TestCase):
+    """every row of tests/rom/test_ops.py OPS_TABLE, through the binary."""
+
+    def test_c_agrees_with_the_rom_ops_table(self):
+        sys.path.insert(0, str(IMAGE / "tests" / "rom"))
+        from test_ops import OPS_TABLE
+        w = addWorld(self)
+        for i, (line, expect) in enumerate(OPS_TABLE):
+            with self.subTest(line=line):
+                r = w.bench("run", w.script(line + "\n", name=f"row{i}.ops"))
+                if expect == "ok":
+                    self.assertEqual(r.returncode, 0, r.stdout)
+                else:
+                    self.assertNotEqual(r.returncode, 0, r.stdout)
+                    self.assertIn(expect, r.stdout)
+                self.assertNotIn(" MAIN", r.stdout)
+
+
 class TestOutFiles(unittest.TestCase):
     """the log is the supervisor's. tool output lives in out-<n>, pinned by the MANIFEST."""
 
