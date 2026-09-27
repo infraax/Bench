@@ -10,6 +10,7 @@ throwaway world (a copy of the image + main/hello.txt). Radio stays unplugged th
 import os
 import re
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
@@ -25,6 +26,7 @@ from isa.karpathy_rom import is_ring0  # noqa: E402
 from peek import woz_bits  # noqa: E402
 
 BENCH = IMAGE / "supervisor" / "bench"
+HELPER = IMAGE / "supervisor" / "bench-helper"
 LAMPS, SLOTS = woz_bits()
 
 TOUCH = """# fixture intern: five legal ops
@@ -38,17 +40,17 @@ WAIT  1
 
 def setUpModule():
     # make (the human/Ring-0 parent) builds the pinned binary. no ROM file spawns it.
-    r = subprocess.run(["make", "supervisor/bench"], cwd=IMAGE,
+    r = subprocess.run(["make", "supervisor/bench", "supervisor/bench-helper"], cwd=IMAGE,
                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     if r.returncode != 0:
-        raise AssertionError("make supervisor/bench failed:\n" + r.stdout)
+        raise AssertionError("make supervisor/bench supervisor/bench-helper failed:\n" + r.stdout)
 
 
 class World:
     """a throwaway copy of the image; the supervisor runs against it via BENCH_ROOT."""
     def __init__(self):
         self.root = Path(tempfile.mkdtemp(prefix="bench-h-"))
-        ign = shutil.ignore_patterns("__pycache__", "bench", "romhash", "*.o")
+        ign = shutil.ignore_patterns("__pycache__", "bench", "bench-helper", "bus_test", "romhash", "*.o")
         for d in ("supervisor", "tools", "isa"):
             shutil.copytree(IMAGE / d, self.root / d, ignore=ign)
         shutil.copytree(IMAGE / "tests" / "rom", self.root / "tests" / "rom", ignore=ign)
@@ -365,6 +367,173 @@ class TestArm(unittest.TestCase):
                 r = w.bench("run", w.script(f"WRITE fs {path} minted\n"))
                 self.assertEqual(r.returncode == 0, ok, r.stdout)
                 self.assertFalse(w.token.exists(), "a WRITE minted the owner token")
+
+
+# a stand-in helper: same argv and socket as bench-helper, scripted answers. harness only.
+STUB = """#!{py}
+import socket, sys, time
+ls = socket.socket(fileno=int(sys.argv[2]))
+c, _ = ls.accept()
+ls.close()
+ANS = {answers!r}
+for line in c.makefile("rb"):
+    a = ANS.get(line.decode().split()[0])
+    if a is None:
+        break
+    if a == "SLEEP":
+        time.sleep(10)
+        break
+    c.sendall((a + "\\n").encode())
+"""
+
+
+class TestMailbox(unittest.TestCase):
+    """bench <-> bench-helper: PING, ARM_OK, FRAME_OK over a unix socket in sessions/<id>/."""
+
+    def bench_with_helper(self, w, answers=None):
+        # a copy of bench in its own dir, with a stub helper beside it (or none at all).
+        d = w.root / "bin"
+        d.mkdir(exist_ok=True)
+        shutil.copy2(BENCH, d / "bench")
+        if answers is not None:
+            h = d / "bench-helper"
+            h.write_text(STUB.format(py=sys.executable, answers=answers))
+            h.chmod(0o755)
+        return d / "bench"
+
+    def run_copy(self, w, exe, script, timeout=30):
+        return subprocess.run([str(exe), "run", w.script(script)], cwd=IMAGE, env=w.env,
+                              stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=timeout)
+
+    def assert_no_session(self, w, r, rc, text):
+        self.assertEqual(r.returncode, rc, r.stdout)
+        self.assertIn(text, r.stdout)
+        self.assertNotIn("frame ", r.stdout)
+        self.assertFalse((w.root / "sessions" / "CURRENT").exists())
+        self.assertIn("session none", w.bench("status").stdout)
+
+    # --- the real helper, through bench ---
+
+    def test_log_records_the_three_words(self):
+        w = addWorld(self)
+        self.assertEqual(w.bench("run", w.script("WAIT 1\nWAIT 1\n")).returncode, 0)
+        log = (w.session() / "log").read_text()
+        self.assertIn("MAILBOX PING -> PING yes", log)
+        self.assertIn("MAILBOX ARM_OK -> ARM_OK yes", log)
+        self.assertIn("MAILBOX FRAME_OK 1 -> FRAME_OK yes", log)
+        self.assertIn("MAILBOX FRAME_OK 2 -> FRAME_OK yes", log)
+
+    def test_socket_path_is_gone_after_pairing(self):
+        w = addWorld(self)
+        self.assertEqual(w.bench("run", w.script("WAIT 1\n")).returncode, 0)
+        self.assertEqual(list(w.session().glob("*.sock")), [])
+
+    def test_mailbox_words_are_not_verbs(self):
+        for line in ("PING", "ARM_OK", "FRAME_OK 1"):
+            with self.subTest(line=line):
+                w = addWorld(self)
+                r = w.bench("run", w.script(line + "\n"))
+                self.assertNotEqual(r.returncode, 0)
+                self.assertIn("unknown verb", r.stdout)
+
+    # --- bench with a missing or scripted helper: fail closed ---
+
+    def test_missing_helper_fails_closed(self):
+        w = addWorld(self)
+        exe = self.bench_with_helper(w, answers=None)
+        self.assert_no_session(w, self.run_copy(w, exe, "WAIT 1\n"), 6, "helper missing")
+
+    def test_silent_helper_fails_closed(self):
+        w = addWorld(self)
+        exe = self.bench_with_helper(w, {"PING": "SLEEP"})
+        t0 = time.monotonic()
+        self.assert_no_session(w, self.run_copy(w, exe, "WAIT 1\n"), 6, "helper silent")
+        self.assertLess(time.monotonic() - t0, 8)
+
+    def test_helper_refusing_arm_stops_start(self):
+        w = addWorld(self)
+        exe = self.bench_with_helper(w, {"PING": "PING yes stub", "ARM_OK": "ARM_OK no stub says no"})
+        self.assert_no_session(w, self.run_copy(w, exe, "WAIT 1\n"), 5, "stub says no")
+
+    def test_helper_refusing_frame_stops_before_the_step(self):
+        w = addWorld(self)
+        exe = self.bench_with_helper(w, {"PING": "PING yes stub", "ARM_OK": "ARM_OK yes stub",
+                                         "FRAME_OK": "FRAME_OK no stub stops frames"})
+        r = self.run_copy(w, exe, "WAIT 1\n")
+        self.assertEqual(r.returncode, 5, r.stdout)
+        self.assertIn("stub stops frames", r.stdout)
+        self.assertEqual((w.state()["status"], w.state()["n"]), ("disarmed", "0"))
+        self.assertEqual(len(w.snaps()), 1)          # s0 only: the step never happened
+
+    def test_wrong_word_in_reply_is_a_broken_line(self):
+        w = addWorld(self)
+        exe = self.bench_with_helper(w, {"PING": "PING yes stub", "ARM_OK": "ARM_OK yes stub",
+                                         "FRAME_OK": "PING yes not the question"})
+        r = self.run_copy(w, exe, "WAIT 1\n")
+        self.assertEqual(r.returncode, 6, r.stdout)
+        self.assertIn("helper-lost", r.stdout)
+
+    # --- the real helper, driven directly ---
+
+    def start_helper(self, w):
+        path = str(w.root / "sessions" / "direct.sock")
+        ls = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        ls.bind(path)
+        ls.listen(1)
+        proc = subprocess.Popen([str(HELPER), str(w.root), str(ls.fileno())],
+                                pass_fds=(ls.fileno(),), env={})
+        ls.close()
+        self.addCleanup(lambda: proc.poll() is None and proc.kill())
+        return path, proc
+
+    def ask(self, f, line):
+        f.write((line + "\n").encode())
+        f.flush()
+        return f.readline().decode().rstrip("\n")
+
+    def test_helper_three_words(self):
+        w = addWorld(self)
+        path, proc = self.start_helper(w)
+        c = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        c.connect(path)
+        f = c.makefile("rwb", buffering=0)
+        self.assertEqual(self.ask(f, "PING"), "PING yes helper v0")
+        self.assertEqual(self.ask(f, "ARM_OK"), "ARM_OK yes owner token present")
+        self.assertEqual(self.ask(f, "FRAME_OK 7"), "FRAME_OK yes armed n=7")
+        w.disarm()
+        self.assertEqual(self.ask(f, "ARM_OK"), "ARM_OK no owner token absent")
+        self.assertTrue(self.ask(f, "FRAME_OK 8").startswith("FRAME_OK no "))
+        # one connection, ever: the listener is closed once the first is taken
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as late:
+            with self.assertRaises(OSError):
+                late.connect(path)
+        # not one of the three words: the line closes, the helper exits nonzero
+        self.assertEqual(self.ask(f, "UNPLUG radio"), "")
+        c.close()
+        self.assertEqual(proc.wait(timeout=5), 1)
+
+    def test_helper_exits_on_eof(self):
+        w = addWorld(self)
+        path, proc = self.start_helper(w)
+        c = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        c.connect(path)
+        c.close()
+        self.assertEqual(proc.wait(timeout=5), 0)
+
+    def test_helper_answers_only_its_parent(self):
+        # the helper's parent here is this test process; a sibling that connects first gets nothing.
+        w = addWorld(self)
+        path, proc = self.start_helper(w)
+        sib = subprocess.run([sys.executable, "-c",
+                              "import socket, sys\n"
+                              "c = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)\n"
+                              "c.connect(sys.argv[1]); c.sendall(b'PING\\n')\n"
+                              "try:\n    got = c.recv(64)\n"
+                              "except ConnectionResetError:\n    got = b''\n"
+                              "print(repr(got))\n", path],
+                             stdout=subprocess.PIPE, text=True, timeout=10)
+        self.assertEqual(sib.stdout.strip(), "b''")
+        self.assertEqual(proc.wait(timeout=5), 1)
 
 
 def hold_quota():

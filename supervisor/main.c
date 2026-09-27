@@ -16,7 +16,9 @@
 #include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
+#include "arm.h"
 #include "frame.h"
+#include "mailbox.h"
 #include "sha256.h"
 
 /* the crown, baked at build. make generates rom_hash.h from the live tests/rom;
@@ -352,21 +354,14 @@ static int rom_ok(void) {
  * the token is checked here, in the supervisor, before any session dir, frame or lamp.
  * the intern cannot mint it: WRITE takes hold/ and proposed/ only, and EXEC children are
  * write-limited to hold/ and proposed/. TEST children are not write-limited; they run ROM
- * code, which a human crowned. stands in for a later hardware key; nothing more. */
+ * code, which a human crowned. stands in for a later hardware key; nothing more.
+ * the helper (bench-helper, over the mailbox) must agree at start (ARM_OK) and before
+ * every frame (FRAME_OK). it can refuse; it cannot arm on its own. missing or silent
+ * helper = fail closed, exit 6. */
 
-#define TOKEN_REL "sessions/OWNER_TOKEN"
+static int armed(void) { return owner_token_present(g_root, getenv("BENCH_TOKEN")); }
 
-static int is_file(const char *p) {
-    struct stat st;
-    return stat(p, &st) == 0 && S_ISREG(st.st_mode);
-}
-
-static int armed(void) {
-    const char *env = getenv("BENCH_TOKEN");
-    if (env && *env && is_file(env)) return 1;
-    char p[1024];
-    return !path_join(p, sizeof p, g_root, TOKEN_REL) && is_file(p);
-}
+static Mailbox g_mb = {-1, -1, -1};
 
 /* ---- commands ---- */
 
@@ -418,6 +413,11 @@ static void fmt_instr(const Instr *in, char *out, size_t n) {
 static int run_gate(Session *s) {
     if (g_halt || exists(s->dir, "KILL")) return ev(s, 3, "halt=kill");
     if (!armed()) return ev(s, 5, "halt=disarmed owner token gone");
+    char n[16], why[128];
+    snprintf(n, sizeof n, "%u", s->n + 1);
+    int ok = mb_ask(&g_mb, "FRAME_OK", n, why, sizeof why);
+    if (ok < 0) return ev(s, 6, "halt=helper-lost no FRAME_OK answer");
+    if (ok == 0) return ev(s, 5, "halt=disarmed helper: %.100s", why);
     return 0;
 }
 
@@ -491,6 +491,25 @@ static int cmd_run(int argc, char **argv) {
         fprintf(stderr, "run: cannot create session dir\n");
         return 1;
     }
+    /* log first, then the helper: a refused start leaves its reason in sessions/<id>/log,
+       and no CURRENT, so status stays dark. */
+    if (path_join(path, sizeof path, dir, "log")) return 1;
+    g_log = open(path, O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0644);
+    if (g_log < 0) return 1;
+    char why[160], r[128];
+    if (mb_open(&g_mb, dir, g_root, g_log, why, sizeof why) != 0) {
+        dprintf(g_log, "MAILBOX fail: %s\n", why);
+        fprintf(stderr, "run: %s — fail closed, no frames ran.\n", why);
+        return 6;
+    }
+    int arm = mb_ask(&g_mb, "ARM_OK", NULL, r, sizeof r);
+    if (arm != 1) {
+        fprintf(stderr, "run: helper %s — %s, no frames ran.\n",
+                arm < 0 ? "silent on ARM_OK" : "refused ARM_OK", arm < 0 ? "fail closed" : r);
+        mb_close(&g_mb);
+        return arm < 0 ? 6 : 5;
+    }
+
     char text[4096] = "";
     snprintf(text, sizeof text, "%s\n", id);
     if (path_join(path, sizeof path, sdir, "CURRENT") || write_atomic(path, text)) return 1;
@@ -504,9 +523,6 @@ static int cmd_run(int argc, char **argv) {
         strncat(text, one, sizeof text - strlen(text) - 1);
     }
     if (path_join(path, sizeof path, dir, "OPS") || write_atomic(path, text)) return 1;
-    if (path_join(path, sizeof path, dir, "log")) return 1;
-    g_log = open(path, O_WRONLY | O_CREAT | O_APPEND, 0644);
-    if (g_log < 0) return 1;
 
     struct sigaction sa;
     memset(&sa, 0, sizeof sa);
@@ -538,7 +554,7 @@ static int cmd_run(int argc, char **argv) {
         int fr = frame(&s, prog[i].op, TOOL[prog[i].op], &prog[i], k_due);
         if (fr > 0) {
             /* stopped at the gate: this op never ran and has no snap */
-            session_state(&s, fr == 3 ? "halt" : fr == 5 ? "disarmed" : "fault");
+            session_state(&s, fr == 3 ? "halt" : fr == 5 ? "disarmed" : "fault");   /* 6: helper lost */
             fprintf(stderr, "HALT line %d: %s\n", prog[i].line, s.ev);
             rc = fr;
             break;
@@ -558,6 +574,7 @@ static int cmd_run(int argc, char **argv) {
         }
     }
     if (rc == 0) session_state(&s, "ok");
+    mb_close(&g_mb);
     close(g_log);
     if (path_join(path, sizeof path, dir, "PID") == 0) unlink(path);
     fflush(stdout);

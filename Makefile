@@ -1,13 +1,19 @@
 CC     ?= cc
 CFLAGS ?= -std=c11 -Wall -Wextra -Werror -O2
 PY     ?= python3
-BENCH_SRC = supervisor/main.c supervisor/frame.c supervisor/sha256.c supervisor/sandbox.c
-HDR       = supervisor/frame.h supervisor/woz_bus.h supervisor/sha256.h supervisor/sandbox.h
+BENCH_SRC = supervisor/main.c supervisor/frame.c supervisor/sha256.c supervisor/sandbox.c \
+            supervisor/arm.c supervisor/mailbox.c
+HDR       = supervisor/frame.h supervisor/woz_bus.h supervisor/sha256.h supervisor/sandbox.h \
+            supervisor/arm.h supervisor/mailbox.h
 ROMH      = supervisor/rom_hash.h
 ROM_FILES = $(wildcard tests/rom/*.py)
 E2E       = sessions/e2e
 
-all: supervisor/bench
+all: supervisor/bench supervisor/bench-helper
+
+# the mailbox helper. bench starts it from its own directory; nothing else should.
+supervisor/bench-helper: supervisor/helper.c supervisor/arm.c supervisor/arm.h
+	$(CC) $(CFLAGS) -o $@ supervisor/helper.c supervisor/arm.c
 
 # build tool: prints the tree hash of tests/rom
 supervisor/romhash: supervisor/romhash.c supervisor/sha256.c supervisor/sha256.h
@@ -28,7 +34,7 @@ supervisor/bus_test: supervisor/bus_test.c supervisor/woz_bus.h
 
 # bus, then ring 0 (pure algebra), then the make-launched harness that drives the binary.
 # pytest if present, stdlib unittest otherwise. no network either way.
-test: supervisor/bench supervisor/bus_test
+test: supervisor/bench supervisor/bench-helper supervisor/bus_test
 	@./supervisor/bus_test
 	@if $(PY) -c "import pytest" 2>/dev/null; then \
 		$(PY) -m pytest tests/rom tests/harness -q; \
@@ -41,7 +47,7 @@ demo: supervisor/bench
 	./supervisor/bench demo
 
 # fixture intern end to end, in a scratch world under sessions/ (gitignored)
-e2e: supervisor/bench
+e2e: supervisor/bench supervisor/bench-helper
 	rm -rf $(E2E) && mkdir -p $(E2E)/main $(E2E)/hold $(E2E)/tests $(E2E)/sessions
 	: > $(E2E)/sessions/OWNER_TOKEN   # you, running make, arm the scratch world
 	cp -r supervisor tools isa $(E2E)/ && cp -r tests/rom $(E2E)/tests/rom
@@ -52,7 +58,7 @@ e2e: supervisor/bench
 	BENCH_ROOT=$(E2E) ./supervisor/bench demo
 
 clean:
-	rm -f supervisor/bench supervisor/romhash supervisor/bus_test $(ROMH)
+	rm -f supervisor/bench supervisor/bench-helper supervisor/romhash supervisor/bus_test $(ROMH)
 	find sessions -mindepth 1 ! -name .gitkeep ! -name OWNER_TOKEN -exec rm -rf {} +   # clean does not disarm
 
 .PHONY: all test demo e2e clean
