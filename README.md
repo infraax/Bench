@@ -37,6 +37,7 @@ make e2e                                  # fixture intern -> frames -> snaps ->
 ./supervisor/bench status [--line]        # the board; --line = one grep-able line
 ./supervisor/bench kill | demo | snap-ls
 ./supervisor/bench restore snap-<k> | <session>/snap-<k>
+./supervisor/bench verify [snap-<k> | <session>/snap-<k>]   # content-hash integrity check
 ```
 
 Exit codes: 0 ok · 1 fault · 2 usage · 3 killed · 4 ROM changed · 5 not armed / disarmed ·
@@ -74,11 +75,13 @@ gate → [TEST: read board] → tool → [TEST: post-conditions] → quotas → 
 all in `frame()` (`supervisor/frame.c`).
 
 - **gate**: KILL, then the pinned token, then helper `FRAME_OK`. A stop here is no step and no snap.
-- **TEST post-conditions**: before a `TEST`, the frame hashes `main/` and `tests/rom/` and stats the
-  token files; after it, again — whatever the test reported. Anything moved →
-  `fault=test-postcondition moved=main,rom,token`, snap without the board (`tree=skipped:tainted`),
-  status `disarmed`, exit 5. A touched or minted `sessions/OWNER_TOKEN` is renamed to
-  `OWNER_TOKEN.tainted-<session>` (never deleted), so it arms nothing.
+- **TEST post-conditions**: before a `TEST`, the frame hashes `main/`, `tests/rom/`, and the session's
+  frozen artifacts (`SESSION`, `OPS`, every prior `snap-*/`), and stats the token files; after it,
+  again — whatever the test reported. `TEST` children run without landlock and, here, as root, so they
+  can reach `sessions/` where `EXEC` cannot; this catches a test that rewrites a prior snapshot.
+  Anything moved → `fault=test-postcondition moved=main,rom,sessions,token`, snap without the board
+  (`tree=skipped:tainted`), status `disarmed`, exit 5. A touched or minted `sessions/OWNER_TOKEN` is
+  renamed to `OWNER_TOKEN.tainted-<session>` (never deleted), so it arms nothing.
 - **KILL** reaches a running child at once; the cut step is snapped with `halt op=exec`, status `halt`, exit 3.
 - **T_frame** (200 ms) is the C thread's own work: gate, TEST board read, quota walk, snap.
   `T_tool` (5 s) is the child's.
@@ -105,16 +108,28 @@ Unchanged files are cheap (see snapshots).
 ## Snapshots
 
 Every step writes `sessions/<id>/snap-<k>/` with `MANIFEST` (evidence, `tree=` hash of `main/`+`hold/`,
-`out=`, `delta=`), `INDEX`, and a copy of `hold/`.
+`board=` hash of the snap's own stored `hold/`, `out=`, `delta=`), `INDEX`, and a copy of `hold/`.
+
+A finished snapshot is **evidence**, protected in two independent layers:
+
+- **Sealed** (prevention): the instant a snap lands it is chmod'd read-only — files `0444`, dirs
+  `0555`. Delta snaps hard-link unchanged files, so a shared inode at `0444` cannot be written in
+  place through *any* link — one snap can no longer corrupt another. Mode bits are advisory against
+  **root**, so this stops every non-root writer (the intended deployment), not a root actor.
+- **Content-addressed** (the guarantee): `board=` is a sha256 of the snap's stored `hold/`.
+  `bench verify [snap]` recomputes and compares — catching any mutation regardless of who made it
+  (root, a `TEST`, bit rot), including a shared inode changed through another link. Exit 0 intact,
+  1 a `MISMATCH`, 2 usage. `restore` runs this check first, before it moves anything.
 
 - **By delta**: a file unchanged since the previous board snap — same (ino, size, mtime, ctime) in
   that snap's `INDEX` — is hard-linked from that snap, never from `hold/`. Everything else is copied.
   1000 unchanged files: ~8 ms instead of ~340 ms. A name containing a newline is always copied.
-- **Restore**: `bench restore snap-<k>` (owner, armed, world locked). The snap must hold a board and
-  `main/` + the snap's `hold/` must hash to its `tree=` before anything moves. The old `hold/` is kept
-  in `sessions/<new>/hold.before`. The new session's s0 is the restored board; status `restored`.
+- **Restore**: `bench restore snap-<k>` (owner, armed, world locked). The snap's `board=` must match,
+  then `main/` + the snap's `hold/` must hash to its `tree=` before anything moves. The old `hold/`
+  is kept in `sessions/<new>/hold.before`. The new session's s0 is the restored board; status `restored`.
 - **Retention**: `run` keeps the newest 20 session dirs (`--keep M` > `BENCH_KEEP`). Never pruned:
   `CURRENT`, sessions holding `hold.before`, anything not named `<epoch>-<pid>`. Links not followed.
+  Retention chmods a sealed tree back to writable only to delete it.
 
 ## Logs and tool output
 
@@ -156,9 +171,19 @@ nothing more. Tool children are limited by the C supervisor:
 - **env**: fixed `PATH`, no `LD_PRELOAD` / `PYTHONPATH`; only `LANG`, `LC_*`, `TZ` pass through.
 - **ROM crown**: `run`, `demo` and `restore` exit 4 if `tests/rom` no longer matches the hash baked at build.
 - **timeout**: each `EXEC`/`TEST` child is killed after `T_tool` (5 s).
+- **output ceiling**: a child's stdout to `out-<n>` is killed past `OUT_CEIL_BYTES` (1 MiB), so a
+  flood cannot fill the disk within `T_tool`.
+
+The supervisor's own file ops are anchored, because it runs as the owner, not landlocked:
+
+- **`READ`/`WRITE` never follow a symlink out of the world.** They walk each path component with
+  `O_NOFOLLOW` from a dirfd opened at the world root, so an intern-planted `hold/x -> /etc` is inert.
+- **`READ`/`WRITE` act on regular files only.** The final open is `O_NONBLOCK`; a fifo, socket or
+  device (which a tool may create in `hold/`) is a fault, not a blocked frame clock.
 
 Known limit: `execve` stays allowed in tool children. A tool can start other programs; they inherit
-the same limits.
+the same limits. Tool children run as the same uid here, so mode-bit sealing of snapshots is
+advisory against them — `bench verify` (content hash) is the guarantee.
 
 Lamps: MAIN and HOLD are never lit together (HOLD wins). BLIND is lit when fb **and** radio are
 both pulled — always, in foundation.

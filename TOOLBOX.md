@@ -22,6 +22,8 @@ This file is concrete enough to implement from. The current tree ships three of 
 | Clock | `T_tool` = 5 s, then the child is killed | `child_run` |
 | Writes | only under `hold/`, `proposed/`, `tests/proposed/`; plus the hold quotas (64 KiB, 256 entries per session) | landlock (EXEC), `frame()` |
 | Radio | none: network syscalls return `EPERM` | seccomp |
+| Paths | `READ`/`WRITE` are anchored at the world root, never follow a symlink out, and act on regular files only (no fifo/device) | supervisor `O_NOFOLLOW`/`O_NONBLOCK` |
+| Snapshots | frozen after each step: sealed read-only and content-hashed; the owner audits with `bench verify` | `frame()` seal + `board=` |
 | One line of text from the intern | `WRITE fs <path> <one line>` writes that line + newline to a file in `hold/`/`proposed/` | `t_write` |
 
 Two consequences shape the whole set:

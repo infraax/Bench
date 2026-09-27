@@ -1,5 +1,56 @@
 # NOTES
 
+## Session 4 — hardening + adversarial pass
+
+### Start
+
+- Head `ae9a22d`, tree clean. `make test`: bus ok, 50 ROM + 99 harness, green.
+
+### Owner asks
+
+| Ask | Commit | Result |
+|---|---|---|
+| File quota → 256 | `bench: file quota default 256` | Default now snaps inside T_frame (1024 new files ≈ 350 ms > 200 ms budget). |
+| Linked snaps — properly solve | `bench: seal snapshots read-only` + `bench: verify` | Two layers: sealing (0444/0555, prevention, non-root) + `board=` content hash and `bench verify` (guarantee, root-proof). restore checks board= first. |
+| TEST covers `sessions/` | `bench: TEST post-conditions cover the session's snapshots` | pre/post hash of SESSION, OPS, every prior snap; `moved=sessions` disarms. |
+
+### Adversarial pass — breaks found and fixed
+
+| # | Break | Commit |
+|---|---|---|
+| 1 | **Root escape**: intern-planted symlink in hold/ + supervisor WRITE (as owner) wrote outside the world. Proven. | `bench: WRITE/READ symlink escape` — O_NOFOLLOW component walk anchored at the world root |
+| 2 | **Frame-clock hang**: a tool mkfifo'd in hold/, a READ blocked the supervisor forever. Proven. | `bench: READ/WRITE refuse fifos and devices` — O_NONBLOCK + S_ISREG |
+| 3 | **Disk DoS**: tool output streamed to out-<n> with no cap. | `bench: hard output ceiling` — killed past 1 MiB |
+
+### Root reality
+
+- This container runs as **root**; tool children run as root too (sandbox.c drops syscalls, not uid).
+  Mode-bit sealing is therefore advisory against the tools — the content hash (`bench verify`) is the
+  real guarantee, and the sealing tests prove denial via a **setuid-nobody child**, not as root.
+
+### Left open (honest, none are new escapes)
+
+- A tool can **read** any file the owner can (it is root) and READ/print it — not a new capability
+  (it could already print to stdout); consistent with the model (leash is on writes/network/crown).
+  The fix is an unprivileged tool uid / mount namespace = sandbox.c, out of scope.
+- `snap-<k>.tmp` litter from a faulted snap; self-limiting, retention reclaims it.
+- `T_session` never binds at foundation budgets; lamp byte constant; Python mirrors C by tables.
+
+### End
+
+- `make test` from a clean tree: `bus_test: ok`, **50 ROM + 117 harness**, green, offline. `make e2e`
+  green; `bench verify` on the e2e session passes (checked=6).
+- Every `tests/rom/*.py` passes `is_ring0`. No socket in ROM. No sixth verb.
+- `supervisor/sandbox.c`, `sandbox.h`, `spec/`: not touched. No live model.
+
+### Exit codes now
+
+0 ok · 1 fault (incl. output ceiling, symlink/fifo refusal) · 2 usage · 3 killed · 4 ROM changed ·
+5 not armed / disarmed / tainted · 6 helper missing/silent/lost/wrong version · 7 world busy / demo running.
+`verify`: 0 intact · 1 mismatch/damaged · 2 usage.
+
+---
+
 ## Session 3 — implementation pass (review → code)
 
 ### Start

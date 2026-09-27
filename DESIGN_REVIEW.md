@@ -7,6 +7,48 @@ with the seats that would have to initial them.
 
 Legend: **[fixed]** landed this session · **[open]** still true in the tree · **[bet]** unmeasured.
 
+## Status after session 4 (hardening + adversarial pass)
+
+Owner asks, all done:
+
+- **File quota → 256** (`bench: file quota default 256`). The default now snaps inside `T_frame`.
+- **Linked snapshots — properly solved**, in two independent layers:
+  - *Prevention*: snaps are **sealed** read-only on landing (files `0444`, dirs `0555`), so a shared
+    hard-linked inode cannot be written in place through any link (`bench: seal snapshots read-only`).
+    Honest limit surfaced: this container runs as **root**, and mode bits are advisory against root —
+    sealing stops every non-root writer, not root.
+  - *Guarantee*: each snap records `board=<sha256 of its stored hold>`, and **`bench verify`**
+    recomputes and compares — catching a mutation of any shared inode regardless of who made it,
+    root included (`bench: verify`). `restore` checks it first.
+- **TEST post-conditions now cover `sessions/`** (`bench: TEST post-conditions cover the session's
+  snapshots`): the pre/post board read hashes `SESSION`, `OPS`, and every prior `snap-*/`, so a
+  crowned TEST that rewrites history mid-run is caught (`moved=sessions`).
+
+Adversarial pass — two real breaks found and fixed, one hang, plus hardening:
+
+1. **[fixed] Root escape via symlink.** The supervisor's `READ`/`WRITE` (run as the owner, not
+   landlocked) only string-checked the path prefix. A tool planted `hold/x -> /outside` and a later
+   `WRITE fs hold/x/f` wrote outside the world as the owner — proven, an outside file was overwritten.
+   Fixed by walking every component with `O_NOFOLLOW` anchored at the world root
+   (`bench: WRITE/READ symlink escape`).
+2. **[fixed] Frame-clock hang via fifo.** A tool `mkfifo`'d in `hold/` (landlock does not restrict
+   fifo creation) and a `READ` of it blocked the supervisor forever. Fixed: finals open `O_NONBLOCK`
+   and must be regular files (`bench: READ/WRITE refuse fifos and devices`).
+3. **[fixed] Unbounded tool output to disk.** `child_run` streamed to `out-<n>` with no hard cap.
+   Now killed past `OUT_CEIL_BYTES` (1 MiB) (`bench: hard output ceiling`).
+
+Still open, recorded honestly (none are new escapes):
+
+- **[open] A tool can read outside the world.** It runs as root and may `open()` or hard-link any file
+  it can read, then `READ`/print it. This is not a new capability — a tool could already print any
+  file to stdout — and is consistent with the model (the leash is on *writes*, network, and the crown,
+  not reads). The real fix is running tool children under an unprivileged uid or a mount namespace,
+  which is `sandbox.c`/kernel-policy territory, out of scope this session.
+- **[open] `snap-<k>.tmp` litter** from a failed snap stays until the session is pruned. Self-limiting
+  (one per faulted session; `snap-ls`/`verify`/retention ignore `.tmp`).
+- **[open] `T_session` never binds** at foundation budgets (edge 12 below); **lamp byte is constant**
+  (edge 15); **Python mirrors C by tables** (edge 16). Unchanged.
+
 ## Status after session 3 (implementation pass)
 
 | Review item | Status | Commit |

@@ -5,7 +5,7 @@ or in `spec/BENCH_SPEC.md`. Nothing here adds a verb. The spec is unchanged.
 
 ---
 
-## Phase now — shipped (sessions 1–3)
+## Phase now — shipped (sessions 1–4)
 
 **Machine**
 
@@ -13,9 +13,26 @@ or in `spec/BENCH_SPEC.md`. Nothing here adds a verb. The spec is unchanged.
   three ROM-owned tables run through the binary: WRITE paths, `hook()` gates, 45 opcode rows.
 - Frame: gate → [TEST board read] → tool → [TEST post-conditions] → quotas → snap → inhibit.
   `T_frame` is the C thread's own work; `T_tool` the child's; budget faults name themselves.
-- Snapshots by delta (hard links from the previous snap, verified by ino/size/mtime/ctime),
-  `restore` with hash check before anything moves, retention (newest 20).
-- Tool output in `out-<n>`, pinned by sha256 in the MANIFEST; the log is the supervisor's.
+- Snapshots by delta (hard links from the previous snap, verified by ino/size/mtime/ctime).
+
+**Snapshots as evidence** (session 4)
+
+- **Sealed** read-only on landing (files `0444`, dirs `0555`): a shared hard-linked inode cannot be
+  written in place through any link. Stops every non-root writer; mode bits are advisory against root.
+- **Content-addressed**: each snap records `board=<sha256 of its stored hold>`. `bench verify`
+  recomputes and compares — the root-proof guarantee, independent of `main/` and of who owns the files.
+- `restore` checks `board=`, then `main/`+`hold/` against `tree=`, before anything moves; old `hold/`
+  kept as `hold.before`. Retention keeps the newest 20 (unseals only to delete).
+- TEST post-conditions cover `main/`, `tests/rom/`, the token, **and** the session's frozen artifacts
+  (`SESSION`, `OPS`, every prior snap).
+
+**Supervisor file safety** (session 4)
+
+- `READ`/`WRITE` anchored at the world root, every component `O_NOFOLLOW`: no intern-planted symlink
+  is ever followed out of the world (closed a proven root escape).
+- `READ`/`WRITE` act on regular files only (`O_NONBLOCK` + `S_ISREG`): a fifo/device cannot hang the
+  frame clock.
+- Tool output to disk capped at `OUT_CEIL_BYTES` (1 MiB): a flood is killed, not left to fill the disk.
 
 **Owner's hand**
 
@@ -24,48 +41,51 @@ or in `spec/BENCH_SPEC.md`. Nothing here adds a verb. The spec is unchanged.
 - Helper mailbox: three words (`PING`, `ARM_OK`, `FRAME_OK`), version-pinned (`helper v0`),
   veto-only, parent-only, fail closed.
 - World lock (`sessions/LOCK`), demo lock (`sessions/DEMO`); `kill` signals only a proven pid;
-  `crashed` is a status.
-- `status --line`: the whole board on one line.
+  `crashed` is a status. `status --line`: the whole board on one line.
 
 **Budgets**
 
 - N ≤ 8, `T_frame` 200 ms, `T_tool` 5 s, `T_session` 60 s, fs/tty caps 4 KiB,
-  hold growth 64 KiB and 256 entries (per-run override), 20 sessions.
+  hold growth 64 KiB and 256 entries (per-run override), out ceiling 1 MiB, 20 sessions.
 
-**Tests**: bus (exhaustive C), 50 ROM, 99 harness — offline.
+**Tests**: bus (exhaustive C), 50 ROM, 117 harness — offline.
 
 ---
 
-## Phase next — the S-list is empty; this is what the review still asks for
+## Phase next — what the review still asks for
 
-Ordered. Each is a supervisor change or a tool, never a verb.
+Ordered. Each is a supervisor change or a tool, never a verb. (Sessions 3–4 cleared the whole S-list,
+`sessions/` coverage, the quota/`T_frame` reconciliation, sealing and `verify`.)
 
-1. **Cover `sessions/` in TEST post-conditions.** Add the current session's MANIFEST/INDEX hashes and
-   `CURRENT` to the TEST board read (new edge after S7: linked snaps share inodes).
-2. **Reconcile file quota and `T_frame`.** Measure create cost per file on the target disk; either the
-   default drops (~256) or `T_frame` is set per notch. Owner decides; the code already reports both faults.
-3. **`bench replay --verify <session>`.** In a scratch world: restore `snap-0`, re-run `OPS`, compare
-   every step's `tree=` and `out=` sha256 with the original MANIFESTs. Output: first divergent step, or
-   `REPLAY ok n=<n>`. Turns "deterministic" from a comment into a number. Owner command, not an op.
-4. **Evidence key table in ROM.** `tests/rom/test_evidence.py`: for each op, the keys its evidence line
+1. **`bench replay --verify <session>`.** In a scratch world: restore `snap-0`, re-run `OPS`, compare
+   every step's `tree=`, `board=` and `out=` sha256 with the original MANIFESTs. Output: first divergent
+   step, or `REPLAY ok n=<n>`. Turns "deterministic" from a comment into a number. Owner command, not an op.
+2. **Evidence key table in ROM.** `tests/rom/test_evidence.py`: for each op, the keys its evidence line
    must carry (`op= kind= slot= … dirty=`), and for each tool in `TOOLBOX.md` its `ev` line keys.
    Harness checks real MANIFESTs against it. The MANIFEST becomes checkable, not just readable.
-5. **Wall clock in `SESSION`.** `started=<RFC 3339>` and `ended=`, informational only. Budgets stay on
+3. **Wall clock in `SESSION`.** `started=<RFC 3339>` and `ended=`, informational only. Budgets stay on
    the monotonic clock.
-6. **The v1 toolbox** (`TOOLBOX.md`): 12 `tools/*.py`, each with a ROM test that imports its pure
+4. **The v1 toolbox** (`TOOLBOX.md`): 12 `tools/*.py`, each with a ROM test that imports its pure
    core, and an `ev` line. Implementable without new philosophy.
-7. **`T_session` that can bind.** Pre-check before a step: remaining budget ≥ `T_tool` + `T_frame`, else
+5. **`T_session` that can bind.** Pre-check before a step: remaining budget ≥ `T_tool` + `T_frame`, else
    stop at the gate. Matters only once N grows.
-8. **Token lifetime.** Optional `--consume-token`: the run renames `OWNER_TOKEN` to
+6. **Token lifetime.** Optional `--consume-token`: the run renames `OWNER_TOKEN` to
    `OWNER_TOKEN.used-<session>` at arm, so one token = one run. Keeps v0's presence rule.
+7. **Prune `snap-<k>.tmp` litter** on `run` start (a faulted snap can leave one). Cosmetic; retention
+   already reclaims it with the session.
 
 ---
 
 ## Phase later — needs a notch, an owner call, or hardware
 
 - **Overnight N.** N > 8 is `SET_LOOP`, Ring 0. Needs: a notch file the owner writes (N, K, T_*,
-  quotas) hashed into s0; the K-snap cadence actually exercised; `T_session` binding (next #7);
-  file quota and `T_frame` reconciled (next #2); retention sized for long runs.
+  quotas) hashed into s0; the K-snap cadence actually exercised; `T_session` binding (next #5);
+  retention sized for long runs.
+- **Tool children under their own uid.** Today a tool runs as the owner (root here), so it can read any
+  file the owner can and chmod past a snap seal — the seal is advisory against it and `bench verify` is
+  the guarantee. Running each tool child as an unprivileged uid (or in a mount namespace that shows only
+  the world) would make the seal binding against tools too and close read-outside-the-world. This is
+  `sandbox.c` / kernel-policy work — deliberately out of scope until the owner asks for it.
 - **Radio as an explicit plug.** Today radio is always pulled and tool children get `EPERM` on the
   network. A radio notch would be: owner flips the plug bit for one session, BLIND goes dark, the
   lamp byte finally carries information, and only the two notch tools in `TOOLBOX.md` (`fetch`,
