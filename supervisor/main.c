@@ -217,17 +217,66 @@ static void out_close(Session *s, int fd, const char *name) {
     snprintf(s->out, sizeof s->out, "%s bytes=%llu sha256=%s", name, (unsigned long long)bytes, hex);
 }
 
+/* ---- symlink-safe file access anchored at the world root ----
+ * the supervisor runs as the owner and its READ/WRITE only string-checked the path prefix, so an
+ * intern that planted a symlink in hold/ (via an EXEC tool) could make a later WRITE follow it out
+ * of the world and write anywhere the owner can. these walk every component with O_NOFOLLOW from a
+ * dirfd opened at the world root: no symlink is ever traversed, so hold/evil -> /etc is inert. */
+static void split_dir(const char *rel, char *dir, size_t dn, const char **base) {
+    const char *slash = strrchr(rel, '/');
+    if (!slash) { dir[0] = 0; *base = rel; return; }
+    size_t l = (size_t)(slash - rel);
+    if (l >= dn) l = dn - 1;
+    memcpy(dir, rel, l);
+    dir[l] = 0;
+    *base = slash + 1;
+}
+
+/* open <reldir> under rootfd one component at a time, refusing any symlink. make=1 creates missing
+   components. reldir must be relative and free of ".." (safe_rel upstream). fd on success, else -1. */
+static int open_dir_beneath(int rootfd, const char *reldir, int make) {
+    int cur = openat(rootfd, ".", O_DIRECTORY | O_RDONLY | O_CLOEXEC);
+    if (cur < 0) return -1;
+    const char *p = reldir;
+    while (*p) {
+        while (*p == '/') p++;
+        if (!*p) break;
+        char comp[256];
+        size_t len = 0;
+        while (p[len] && p[len] != '/') len++;
+        if (len >= sizeof comp) { close(cur); errno = ENAMETOOLONG; return -1; }
+        memcpy(comp, p, len);
+        comp[len] = 0;
+        p += len;
+        if (make) mkdirat(cur, comp, 0755);   /* EEXIST is fine; a symlink here is caught next */
+        int nx = openat(cur, comp, O_DIRECTORY | O_NOFOLLOW | O_RDONLY | O_CLOEXEC);
+        close(cur);
+        if (nx < 0) return -1;                 /* ELOOP if comp is a symlink: the escape is refused */
+        cur = nx;
+    }
+    return cur;
+}
+
 static int t_read(Session *s, void *arg) {
     Instr *in = arg;
     int sl = slot_of(in->slot);
     if (wired(s, sl, in->slot)) return 1;
     if (sl != SLOT_FS) return ev(s, 1, "deny slot=%s no device in foundation", in->slot);
-    char p[1024], buf[4097];
-    if (path_join(p, sizeof p, s->root, in->path)) return ev(s, 1, "path too long");
-    FILE *f = fopen(p, "rb");
-    if (!f) return ev(s, 1, "op=read slot=fs path=%s err=%s", in->path, strerror(errno));
-    size_t cap = s->bus.cap[SLOT_FS], n = fread(buf, 1, cap + 1 < sizeof buf ? cap + 1 : sizeof buf, f);
-    fclose(f);
+    char buf[4097], dir[1024];
+    const char *base;
+    int rootfd = open(s->root, O_DIRECTORY | O_RDONLY | O_CLOEXEC);
+    if (rootfd < 0) return ev(s, 1, "op=read path=%s err=no world root", in->path);
+    split_dir(in->path, dir, sizeof dir, &base);
+    int dfd = open_dir_beneath(rootfd, dir, 0);
+    close(rootfd);
+    if (dfd < 0) return ev(s, 1, "op=read slot=fs path=%s err=%s", in->path, strerror(errno));
+    int rf = openat(dfd, base, O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
+    close(dfd);
+    if (rf < 0) return ev(s, 1, "op=read slot=fs path=%s err=%s", in->path, strerror(errno));
+    size_t cap = s->bus.cap[SLOT_FS], n = 0;   /* buf is cap+1 wide: reading it full means over cap */
+    ssize_t r;
+    while (n < sizeof buf && (r = read(rf, buf + n, sizeof buf - n)) > 0) n += (size_t)r;
+    close(rf);
     if (n > cap) return ev(s, 1, "leash op=read path=%s bytes>%zu", in->path, cap);
     char name[32];
     int fd = out_open(s, name, sizeof name);
@@ -239,21 +288,38 @@ static int t_read(Session *s, void *arg) {
     return ev(s, 0, "op=read kind=none slot=fs path=%s bytes=%zu dirty=0", in->path, n);
 }
 
+/* write text to <base> in dfd atomically (temp + renameat), refusing to follow a symlink at base. */
+static int write_beneath(int dfd, const char *base, const char *text, size_t n) {
+    char tmp[300];
+    if (snprintf(tmp, sizeof tmp, "%s.benchtmp", base) >= (int)sizeof tmp) return -1;
+    int fd = openat(dfd, tmp, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW | O_CLOEXEC, 0644);
+    if (fd < 0) return -1;
+    int bad = n && write(fd, text, n) != (ssize_t)n;
+    if (close(fd) != 0) bad = 1;
+    if (bad) { unlinkat(dfd, tmp, 0); return -1; }
+    if (renameat(dfd, tmp, dfd, base) != 0) { unlinkat(dfd, tmp, 0); return -1; }
+    return 0;
+}
+
 static int t_write(Session *s, void *arg) {
     Instr *in = arg;
     int sl = slot_of(in->slot);
     if (wired(s, sl, in->slot)) return 1;
     if (sl != SLOT_FS) return ev(s, 1, "deny slot=%s no device in foundation", in->slot);
-    char p[1024], text[300];
+    char text[300], dir[1024];
+    const char *base;
     snprintf(text, sizeof text, "%s%s", in->rest, in->rest[0] ? "\n" : "");
     size_t n = strlen(text);
     if (n > s->bus.cap[SLOT_FS]) return ev(s, 1, "leash op=write bytes>%u", s->bus.cap[SLOT_FS]);
-    if (path_join(p, sizeof p, s->root, in->path)) return ev(s, 1, "path too long");
-    char *slash = strrchr(p, '/');
-    *slash = 0;
-    int bad = mkdirs(p);
-    *slash = '/';
-    if (bad || write_atomic(p, text)) return ev(s, 1, "op=write path=%s err=%s", in->path, strerror(errno));
+    int rootfd = open(s->root, O_DIRECTORY | O_RDONLY | O_CLOEXEC);
+    if (rootfd < 0) return ev(s, 1, "op=write path=%s err=no world root", in->path);
+    split_dir(in->path, dir, sizeof dir, &base);
+    int dfd = open_dir_beneath(rootfd, dir, 1);
+    close(rootfd);
+    if (dfd < 0) return ev(s, 1, "op=write path=%s err=%s", in->path, strerror(errno));
+    int bad = write_beneath(dfd, base, text, n);
+    close(dfd);
+    if (bad) return ev(s, 1, "op=write path=%s err=%s", in->path, strerror(errno));
     dprintf(g_log, "WRITE fs %s %zu bytes\n", in->path, n);
     return ev(s, 0, "op=write kind=none slot=fs path=%s bytes=%zu dirty=0", in->path, n);
 }

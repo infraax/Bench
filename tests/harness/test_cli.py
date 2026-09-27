@@ -1496,6 +1496,41 @@ class TestCage(unittest.TestCase):
         self.assertEqual((w.root / "tests" / "rom" / "test_isa.py").read_text(), rom_before,
                          "writing through a hold/ symlink reached ROM")
 
+    def test_supervisor_write_does_not_follow_an_intern_symlink_out_of_world(self):
+        # an EXEC tool plants a symlink in hold/ pointing outside the world; a later WRITE
+        # (run by the supervisor as the owner) must not follow it to write outside. O_NOFOLLOW.
+        w = addWorld(self)
+        outside = w.root.parent / (w.root.name + "-outside")
+        outside.mkdir()
+        (outside / "secret.txt").write_text("SECRET-original\n")
+        self.addCleanup(rmtree_force, outside)
+        w.tool("link.py", f"import os\nos.symlink({str(outside)!r}, 'hold/escape')\n")
+        r = w.bench("run", w.script("EXEC tools/link.py\nWRITE fs hold/escape/secret.txt PWNED\n"))
+        self.assertNotEqual(r.returncode, 0, r.stdout)
+        self.assertIn("op=write", r.stdout)
+        self.assertEqual((outside / "secret.txt").read_text(), "SECRET-original\n",
+                         "a WRITE followed an intern symlink out of the world")
+
+    def test_supervisor_read_does_not_follow_an_intern_symlink_out_of_world(self):
+        w = addWorld(self)
+        outside = w.root.parent / (w.root.name + "-oread")
+        outside.mkdir()
+        (outside / "secret.txt").write_text("TOP-SECRET\n")
+        self.addCleanup(rmtree_force, outside)
+        w.tool("link.py", f"import os\nos.symlink({str(outside)!r}, 'hold/peek')\n")
+        r = w.bench("run", w.script("EXEC tools/link.py\nREAD fs hold/peek/secret.txt\n"))
+        self.assertNotEqual(r.returncode, 0, r.stdout)
+        out2 = w.session() / "out-2"
+        self.assertFalse(out2.exists() and "TOP-SECRET" in out2.read_text(),
+                         "a READ followed an intern symlink and leaked an outside file")
+
+    def test_nested_hold_write_and_read_still_work(self):
+        w = addWorld(self)
+        r = w.bench("run", w.script("WRITE fs hold/a/b/c.txt deep\nREAD fs hold/a/b/c.txt\n"))
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertEqual((w.root / "hold" / "a" / "b" / "c.txt").read_text(), "deep\n")
+        self.assertEqual((w.session() / "out-2").read_text(), "deep\n")
+
     def test_rom_hash_tamper_refuses_boot(self):
         w = addWorld(self)
         # first prove it boots clean
