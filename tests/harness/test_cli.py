@@ -977,6 +977,34 @@ class TestRetention(unittest.TestCase):
         self.assertEqual(len(self.session_dirs(w)), 5)
 
 
+def out_ceil():
+    hdr = (IMAGE / "supervisor" / "frame.h").read_text()
+    expr = re.search(r"#define OUT_CEIL_BYTES \(([^)]+)\)", hdr).group(1)
+    return eval(expr.replace("u", ""))     # C's 1u<<20 -> Python 1<<20
+
+
+class TestOutputCeiling(unittest.TestCase):
+    """a tool child's output to disk has a hard ceiling; a flood is killed mid-stream."""
+
+    def test_exec_flood_is_killed_near_the_ceiling(self):
+        w = addWorld(self)
+        w.tool("flood.py", "import sys\nwhile True:\n    sys.stdout.write('x' * 65536)\n")
+        t0 = time.monotonic()
+        r = w.bench("run", w.script("EXEC tools/flood.py\n"), timeout=30)
+        self.assertNotEqual(r.returncode, 0, r.stdout)
+        self.assertIn("leash op=exec", r.stdout)
+        self.assertIn("out>", r.stdout)
+        self.assertLess(time.monotonic() - t0, 10, "flood ran too long before the knife")
+        size = (w.session() / "out-1").stat().st_size
+        self.assertLessEqual(size, out_ceil() + 65536, "out file grew well past the ceiling")
+
+    def test_normal_output_is_untouched(self):
+        w = addWorld(self)
+        w.tool("say.py", "print('a modest line')\n")
+        self.assertEqual(w.bench("run", w.script("EXEC tools/say.py\n")).returncode, 0)
+        self.assertIn("a modest line", (w.session() / "out-1").read_text())
+
+
 class TestOutFiles(unittest.TestCase):
     """the log is the supervisor's. tool output lives in out-<n>, pinned by the MANIFEST."""
 

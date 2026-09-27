@@ -72,12 +72,20 @@ int  frame(Session *s, Op op, Tool tool, void *arg, int k_due);   /* 0 ok, >0 ga
 int  snap(Session *s, const char *why);
 int  session_state(const Session *s, const char *status);
 
+/* the hard ceiling on a tool child's output to disk. the tty cap is an evidence leash checked
+   after the fact; this is the wall: a child past it is killed mid-stream so a flood cannot fill
+   the disk within T_tool. generous, so real output (a failing test's traceback) survives. */
+#ifndef OUT_CEIL_BYTES
+#define OUT_CEIL_BYTES (1u<<20)
+#endif
+
 /* tools are children with a knife. returns exit code, -2 on timeout, -3 on halt (g_halt: the
-   child is killed now, not after T_tool), -1 on spawn failure.
+   child is killed now, not after T_tool), -4 on output past out_max (killed), -1 on spawn failure.
+   out_max = 0 means no ceiling.
    stdout is captured into out (truncated) and counted in *nbytes; copied to log_fd if >= 0.
    err_fd >= 0 receives the child's stderr, otherwise it is inherited. */
 int  child_run(const char *root, char *const argv[], Jail jail, char *out, size_t outsz,
-               uint64_t *nbytes, uint32_t timeout_ms, int log_fd, int err_fd);
+               uint64_t *nbytes, uint32_t timeout_ms, uint64_t out_max, int log_fd, int err_fd);
 
 /* bytes in regular files, and entries (regular files + dirs), under path — the top itself
    not counted. links and devices are not board state, same as snap. adds into the outputs. */

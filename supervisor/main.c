@@ -276,10 +276,11 @@ static int t_exec(Session *s, void *arg) {
     int fd = out_open(s, name, sizeof name);
     if (fd < 0) return ev(s, 1, "op=exec prog=%s err=cannot open out file", in->slot);
     dprintf(g_log, "EXEC %s %s -> %s\n", in->slot, in->rest, name);
-    int rc = child_run(s->root, argv, JAIL_FULL, NULL, 0, &nb, s->t_tool_ms, fd, fd);
+    int rc = child_run(s->root, argv, JAIL_FULL, NULL, 0, &nb, s->t_tool_ms, OUT_CEIL_BYTES, fd, fd);
     out_close(s, fd, name);
     if (rc == -2) return ev(s, 1, "knife op=exec prog=%s timeout>%ums", in->slot, s->t_tool_ms);
     if (rc == -3) return ev(s, 1, "halt op=exec prog=%s child killed", in->slot);
+    if (rc == -4) return ev(s, 1, "leash op=exec prog=%s out>%u killed", in->slot, OUT_CEIL_BYTES);
     if (nb > s->bus.cap[SLOT_TTY]) return ev(s, 1, "leash op=exec out=%llu>%u", (unsigned long long)nb, s->bus.cap[SLOT_TTY]);
     return ev(s, rc != 0, "op=exec kind=none slot=%s rc=%d out=%llu dirty=0", in->slot, rc, (unsigned long long)nb);
 }
@@ -301,11 +302,12 @@ static int t_test(Session *s, void *arg) {
     int fd = out_open(s, name, sizeof name);
     if (fd < 0) return ev(s, 1, "op=test path=%s err=cannot open out file", in->path);
     dprintf(g_log, "TEST %s %s -> %s\n", in->slot, in->path, name);
-    int rc = child_run(s->root, argv, JAIL_NET_ONLY, out, sizeof out, NULL, s->t_tool_ms, fd, fd);
+    int rc = child_run(s->root, argv, JAIL_NET_ONLY, out, sizeof out, NULL, s->t_tool_ms, OUT_CEIL_BYTES, fd, fd);
     out_close(s, fd, name);
     out[strcspn(out, "\r\n")] = 0;
     if (rc == -2) return ev(s, 1, "knife op=test path=%s timeout>%ums", in->path, s->t_tool_ms);
     if (rc == -3) return ev(s, 1, "halt op=test path=%s child killed", in->path);
+    if (rc == -4) return ev(s, 1, "leash op=test path=%s out>%u killed", in->path, OUT_CEIL_BYTES);
     return ev(s, rc != 0, "op=test kind=%s slot=fs path=%s rc=%d result=\"%s\" dirty=0",
               !strcmp(in->slot, "PURE") ? "pure" : "scalar", in->path, rc, out);
 }
@@ -920,11 +922,12 @@ static int cmd_demo(void) {
     fprintf(stderr, "demo: roms=%u knife=%ums\n", roms, knife);
     char *argv[] = {"python3", "tools/test_runner.py", NULL};
     char out[256] = "";
-    int rc = child_run(g_root, argv, JAIL_NET_ONLY, out, sizeof out, NULL, knife, -1, -1);
+    int rc = child_run(g_root, argv, JAIL_NET_ONLY, out, sizeof out, NULL, knife, OUT_CEIL_BYTES, -1, -1);
     char *nl = strchr(out, '\n');
     if (nl) *nl = 0;
     if (rc == -3) { printf("HALT demo killed\n"); return 3; }
     if (rc == -2) { printf("RED knife>%ums\n", knife); return 1; }
+    if (rc == -4) { printf("RED out>%u\n", OUT_CEIL_BYTES); return 1; }
     if (rc != 0) {
         printf("%s\n", prefix(out, "RED") ? out : "RED");
         return 1;

@@ -66,7 +66,7 @@ int write_atomic(const char *path, const char *text) {
 }
 
 int child_run(const char *root, char *const argv[], Jail jail, char *out, size_t outsz,
-              uint64_t *nbytes, uint32_t timeout_ms, int log_fd, int err_fd) {
+              uint64_t *nbytes, uint32_t timeout_ms, uint64_t out_max, int log_fd, int err_fd) {
     int p[2];
     if (pipe(p) != 0) return -1;
     pid_t pid = fork();
@@ -100,6 +100,15 @@ int child_run(const char *root, char *const argv[], Jail jail, char *out, size_t
                 size_t c = (size_t)r < outsz - 1 - used ? (size_t)r : outsz - 1 - used;
                 memcpy(out + used, buf, c);
                 used += c;
+            }
+            if (out_max && total > out_max) {
+                /* the disk knife: a flood does not outlive the ceiling by more than one buffer */
+                kill(pid, SIGKILL);
+                waitpid(pid, &st, 0);
+                close(p[0]);
+                if (out) out[used] = 0;
+                if (nbytes) *nbytes = total;
+                return -4;
             }
         }
         if (r == 0) eof = 1;
