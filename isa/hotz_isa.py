@@ -3,7 +3,8 @@
 
 from __future__ import annotations
 from enum import IntEnum, auto
-from dataclasses import dataclass
+from dataclasses import FrozenInstanceError, dataclass
+import sys
 import weakref
 
 class FastEnum(IntEnum):
@@ -24,21 +25,41 @@ class Ring(FastEnum):
     ROM=0; HOLD=1; WORK=2
 
 class UCache(type):
-    _c: dict[tuple, weakref.ReferenceType] = {}
+    # dead terms drop out of the table on their own; the cache never holds a term alive.
+    _c: weakref.WeakValueDictionary = weakref.WeakValueDictionary()
     def __call__(cls, *a):
         # NOTE: identity equality is the CSE. do not add fields that don't belong in the key.
-        k = a
-        w = cls._c.get(k)
-        if w is not None and (o := w()) is not None: return o
+        # type check before the lookup: Op.READ == 1 as an IntEnum, so a raw int would
+        # otherwise share a key with the real term, and `ring is Ring.ROM` would miss 0.
+        _typecheck(a)
+        o = cls._c.get(a)
+        if o is not None: return o
         o = super().__call__(*a)
-        cls._c[k] = weakref.ref(o)
+        cls._c[a] = o
         return o
 
+_TYPES = (Op, str, str, (Kind, type(None)), Ring)
+
+def _typecheck(a: tuple) -> None:
+    if len(a) != len(_TYPES):
+        raise TypeError(f"Step takes {len(_TYPES)} positional fields, got {len(a)}")
+    for v, t in zip(a, _TYPES):
+        if not isinstance(v, t):
+            raise TypeError(f"Step field {v!r} is not {t}")
+
 # slots is the constructor law: no extra attributes, no sixth field taped on at runtime.
+# frozen: a term is shared by every holder of the same key, so it may not change after birth.
 # a slotted dataclass has no __weakref__ by default and UCache needs one, so ask for it.
 # 3.11+ has weakref_slot=True; on 3.10 spell __slots__ by hand incl. "__weakref__".
-@dataclass(eq=False, slots=True, weakref_slot=True)
+if sys.version_info >= (3, 11):
+    _step_dc = dataclass(eq=False, frozen=True, slots=True, weakref_slot=True)
+else:
+    _step_dc = dataclass(eq=False, frozen=True)
+
+@_step_dc
 class Step(metaclass=UCache):
+    if sys.version_info < (3, 11):
+        __slots__ = ("op", "slot", "arg", "kind", "ring", "__weakref__")
     op: Op
     slot: str
     arg: str
@@ -53,6 +74,17 @@ class Step(metaclass=UCache):
             raise RuntimeError("test without kind")
         if self.kind is Kind.JUDGE and self.ring is Ring.ROM:
             raise RuntimeError("dirty DMA is not ROM")  # the wall
+
+# frozen+slots on 3.11+ rebuilds the class, and the generated __setattr__ still names the old
+# one: an unknown attribute then raises TypeError, not AttributeError. one refusal, every version.
+def _no_write(self, name, value):
+    raise FrozenInstanceError(f"Step is frozen: cannot assign {name!r}")
+
+def _no_delete(self, name):
+    raise FrozenInstanceError(f"Step is frozen: cannot delete {name!r}")
+
+Step.__setattr__ = _no_write
+Step.__delattr__ = _no_delete
 
 def hook(step: Step, plugged: frozenset[str], radio: bool) -> Step | None:
     """deny is None. rewrite must stay in ACTUATORS. no new ontology here."""
