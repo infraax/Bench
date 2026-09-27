@@ -485,6 +485,52 @@ static int cmd_status(void) {
     return 0;
 }
 
+/* one line, the owner's whole board, grep-able. STATE + SESSION, plus three live readings:
+   hold growth now, armed now, and who holds the world. no JSON, no dashboard. */
+static int cmd_status_line(void) {
+    char dir[1024], id[128], path[1100], st[1024], se[1024], v[64];
+    TokenId t;
+    char tw[256];
+    const char *armed_now = arm_read(&t, tw, sizeof tw) ? "yes" : "no";
+    pid_t holder = lock_holder();
+    if (current_dir(dir, sizeof dir, id, sizeof id)) {
+        printf("none dark armed=%s lock=%s\n", armed_now, holder ? "held" : "free");
+        return 0;
+    }
+    if (path_join(path, sizeof path, dir, "STATE") || read_small(path, st, sizeof st)) {
+        printf("%s nostate armed=%s lock=%s\n", id, armed_now, holder ? "held" : "free");
+        return 1;
+    }
+    se[0] = 0;
+    if (!path_join(path, sizeof path, dir, "SESSION")) read_small(path, se, sizeof se);
+
+    char status[32], sn[32], n[16], N[16], helper[32];
+    kv(st, "status", status, sizeof status);
+    if (!strcmp(status, "run") && !holder) snprintf(status, sizeof status, "crashed");
+    unsigned lamps = (unsigned)strtoul(kv(st, "lamps", v, sizeof v) ? v : "0", NULL, 16);
+    char lit[32] = "";
+    if (lamps & LAMP_MAIN) strcat(lit, "MAIN,");
+    if (lamps & LAMP_HOLD) strcat(lit, "HOLD,");
+    if (lamps & LAMP_BLIND) strcat(lit, "BLIND,");
+    if (lit[0]) lit[strlen(lit) - 1] = 0; else snprintf(lit, sizeof lit, "dark");
+
+    unsigned long long qb = strtoull(kv(se, "hold_quota", v, sizeof v) ? v : "0", NULL, 10);
+    unsigned long long bb = strtoull(kv(se, "hold_base", v, sizeof v) ? v : "0", NULL, 10);
+    unsigned long long qf = strtoull(kv(se, "hold_files_quota", v, sizeof v) ? v : "0", NULL, 10);
+    unsigned long long bf = strtoull(kv(se, "hold_base_files", v, sizeof v) ? v : "0", NULL, 10);
+    uint64_t hb = 0, hf = 0;
+    char hp[1100];
+    if (!path_join(hp, sizeof hp, g_root, "hold")) tree_count(hp, &hb, &hf);
+    long long db = (long long)hb - (long long)bb, df = (long long)hf - (long long)bf;
+
+    printf("%s %s%s n=%s/%s snap=%s lamps=%s hold=%+lld/%llu files=%+lld/%llu armed=%s helper=%s lock=%s\n",
+           id, status, exists(dir, "KILL") ? ",killed" : "",
+           kv(st, "n", n, sizeof n) ? n : "?", kv(st, "N", N, sizeof N) ? N : "?",
+           kv(st, "snap", sn, sizeof sn) ? sn : "-", lit, db, qb, df, qf, armed_now,
+           kv(se, "helper", helper, sizeof helper) ? helper : "-", holder ? "held" : "free");
+    return 0;
+}
+
 static void fmt_instr(const Instr *in, char *out, size_t n) {
     switch (in->op) {
     case OP_WAIT: snprintf(out, n, "WAIT %u\n", in->ms); break;
@@ -649,6 +695,11 @@ static int cmd_run(int argc, char **argv) {
     }
     s.gate = run_gate;
     s.tok = tok;
+    /* SESSION is frozen once frames start; the helper that answered is part of it. */
+    if (path_join(path, sizeof path, dir, "SESSION") == 0) {
+        int sf = open(path, O_WRONLY | O_APPEND | O_CLOEXEC);
+        if (sf >= 0) { dprintf(sf, "helper=%s\n", HELPER_VERSION + strlen("helper ")); close(sf); }
+    }
     dprintf(g_log, "ARM token %s dev=%llu ino=%llu\n", tok.path,
             (unsigned long long)tok.dev, (unsigned long long)tok.ino);
 
@@ -762,7 +813,11 @@ int main(int argc, char **argv) {
     const char *r = getenv("BENCH_ROOT");
     if (r && *r) g_root = r;
     if (argc < 2) goto usage;
-    if (!strcmp(argv[1], "status")) return cmd_status();
+    if (!strcmp(argv[1], "status")) {
+        if (argc == 3 && !strcmp(argv[2], "--line")) return cmd_status_line();
+        if (argc != 2) goto usage;
+        return cmd_status();
+    }
     if (!strcmp(argv[1], "run")) return cmd_run(argc - 2, argv + 2);
     if (!strcmp(argv[1], "kill")) return cmd_kill();
     if (!strcmp(argv[1], "demo")) return cmd_demo();

@@ -4,6 +4,9 @@
 #include <stddef.h>
 #include <sys/types.h>
 
+/* the one helper bench talks to. a helper answering PING with anything else is refused. */
+#define HELPER_VERSION "helper v0"
+
 typedef struct {
     int   fd;      /* connected to the helper; CLOEXEC, so no tool child inherits it */
     pid_t pid;     /* the helper */

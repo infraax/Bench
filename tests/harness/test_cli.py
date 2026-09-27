@@ -469,6 +469,64 @@ for line in c.makefile("rb"):
 """
 
 
+LINE = re.compile(
+    r"^(?P<id>\S+) (?P<status>\S+) n=(?P<n>\d+)/(?P<N>\d+) snap=(?P<snap>\S+) lamps=(?P<lamps>\S+) "
+    r"hold=(?P<hold>[+-]\d+)/(?P<hq>\d+) files=(?P<files>[+-]\d+)/(?P<fq>\d+) "
+    r"armed=(?P<armed>yes|no) helper=(?P<helper>\S+) lock=(?P<lock>held|free)$")
+
+
+class TestStatusLine(unittest.TestCase):
+    """bench status --line: one line, the whole board, grep-able."""
+
+    def line(self, w):
+        r = w.bench("status", "--line")
+        out = r.stdout.strip()
+        self.assertEqual(len(out.splitlines()), 1, out)
+        return r, out
+
+    def test_no_session(self):
+        w = addWorld(self)
+        r, out = self.line(w)
+        self.assertEqual(r.returncode, 0)
+        self.assertEqual(out, "none dark armed=yes lock=free")
+        w.disarm()
+        self.assertEqual(self.line(w)[1], "none dark armed=no lock=free")
+
+    def test_after_a_run(self):
+        w = addWorld(self)
+        self.assertEqual(w.bench("run", w.script("WRITE fs hold/a.txt hello\nWAIT 1\n")).returncode, 0)
+        _, out = self.line(w)
+        m = LINE.match(out)
+        self.assertIsNotNone(m, out)
+        self.assertEqual(m["id"], w.state()["session"])
+        self.assertEqual((m["status"], m["n"], m["N"]), ("ok", "2", "8"))
+        self.assertEqual(m["snap"], w.state()["snap"])
+        self.assertEqual(m["lamps"], "HOLD,BLIND")
+        self.assertEqual((m["hold"], m["hq"]), ("+6", str(hold_quota())))
+        self.assertEqual((m["files"], m["fq"]), ("+1", str(hold_files_quota())))
+        self.assertEqual((m["armed"], m["helper"], m["lock"]), ("yes", "v0", "free"))
+
+    def test_while_running_and_after_a_crash(self):
+        w = addWorld(self)
+        proc = subprocess.Popen([str(BENCH), "run", w.script("WAIT 400\n" * 4)], cwd=IMAGE, env=w.env,
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self.addCleanup(lambda: proc.poll() is None and proc.kill())
+        deadline = time.monotonic() + 15
+        while time.monotonic() < deadline and not ((w.root / "sessions" / "CURRENT").exists()
+                                                   and (w.session() / "snap-1").exists()):
+            time.sleep(0.02)
+        m = LINE.match(self.line(w)[1])
+        self.assertEqual((m["status"], m["lock"]), ("run", "held"))
+        proc.kill()          # a hard stop: no end written
+        proc.wait(timeout=10)
+        m = LINE.match(self.line(w)[1])
+        self.assertEqual((m["status"], m["lock"]), ("crashed", "free"))
+
+    def test_status_takes_only_line(self):
+        w = addWorld(self)
+        self.assertEqual(w.bench("status", "--json").returncode, 2)
+
+
 class TestOutFiles(unittest.TestCase):
     """the log is the supervisor's. tool output lives in out-<n>, pinned by the MANIFEST."""
 
@@ -642,12 +700,12 @@ class TestMailbox(unittest.TestCase):
 
     def test_helper_refusing_arm_stops_start(self):
         w = addWorld(self)
-        exe = self.bench_with_helper(w, {"PING": "PING yes stub", "ARM_OK": "ARM_OK no stub says no"})
+        exe = self.bench_with_helper(w, {"PING": "PING yes helper v0", "ARM_OK": "ARM_OK no stub says no"})
         self.assert_no_session(w, self.run_copy(w, exe, "WAIT 1\n"), 5, "stub says no")
 
     def test_helper_refusing_frame_stops_before_the_step(self):
         w = addWorld(self)
-        exe = self.bench_with_helper(w, {"PING": "PING yes stub", "ARM_OK": "ARM_OK yes stub",
+        exe = self.bench_with_helper(w, {"PING": "PING yes helper v0", "ARM_OK": "ARM_OK yes stub",
                                          "FRAME_OK": "FRAME_OK no stub stops frames"})
         r = self.run_copy(w, exe, "WAIT 1\n")
         self.assertEqual(r.returncode, 5, r.stdout)
@@ -655,9 +713,14 @@ class TestMailbox(unittest.TestCase):
         self.assertEqual((w.state()["status"], w.state()["n"]), ("disarmed", "0"))
         self.assertEqual(len(w.snaps()), 1)          # s0 only: the step never happened
 
+    def test_wrong_helper_version_is_refused(self):
+        w = addWorld(self)
+        exe = self.bench_with_helper(w, {"PING": "PING yes helper v1", "ARM_OK": "ARM_OK yes stub"})
+        self.assert_no_session(w, self.run_copy(w, exe, "WAIT 1\n"), 6, "helper version")
+
     def test_wrong_word_in_reply_is_a_broken_line(self):
         w = addWorld(self)
-        exe = self.bench_with_helper(w, {"PING": "PING yes stub", "ARM_OK": "ARM_OK yes stub",
+        exe = self.bench_with_helper(w, {"PING": "PING yes helper v0", "ARM_OK": "ARM_OK yes stub",
                                          "FRAME_OK": "PING yes not the question"})
         r = self.run_copy(w, exe, "WAIT 1\n")
         self.assertEqual(r.returncode, 6, r.stdout)

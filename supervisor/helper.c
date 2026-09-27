@@ -69,7 +69,7 @@ int main(int argc, char **argv) {
         int armed = owner_token_present(root, env_token);
         int rc;
         if (!strcmp(line, "PING")) {
-            rc = reply(fd, "PING", 1, "helper v0");
+            rc = reply(fd, "PING", 1, "helper v0");   /* bench pins this: mailbox.h HELPER_VERSION */
         } else if (!strcmp(line, "ARM_OK")) {
             rc = reply(fd, "ARM_OK", armed, armed ? "owner token present" : "owner token absent");
         } else if (!strncmp(line, "FRAME_OK ", 9) && line[9]) {

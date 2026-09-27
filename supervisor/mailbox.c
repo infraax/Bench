@@ -101,6 +101,11 @@ int mb_open(Mailbox *m, const char *dir, const char *root, int log_fd, char *why
         mb_close(m);
         return -1;
     }
+    if (strcmp(r, HELPER_VERSION) != 0) {
+        snprintf(why, whyn, "helper version '%.40s', bench needs '%s'", r, HELPER_VERSION);
+        mb_close(m);
+        return -1;
+    }
     return 0;
 }
 
