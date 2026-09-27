@@ -7,6 +7,37 @@ with the seats that would have to initial them.
 
 Legend: **[fixed]** landed this session · **[open]** still true in the tree · **[bet]** unmeasured.
 
+## Status after session 3 (implementation pass)
+
+| Review item | Status | Commit |
+|---|---|---|
+| Improvement 1 — TEST post-conditions (sharp edge 6) | **done** | `bench: M1 test postconditions` |
+| Improvement 2 — token identity and mode (sharp edge 7, mostly) | **done** | `bench: M2 token identity` |
+| Improvement 3 — split the log (sharp edge 8) | **done** | `bench: M3 split the log` |
+| Improvement 4 — world lock (sharp edges 9, 10) | **done** (fcntl, not flock: `F_GETLK` names the holder) | `bench: M4 world lock` |
+| Improvement 5 — `status --line` | **done**, plus helper version pin | `bench: M5 status --line, helper version pin` |
+| Improvement 6 — file quota | **done** | `bench: M6 file quota` |
+| Improvement 7 — snap by delta (sharp edge 11) | **done**, measured 344 ms → 8 ms per 1000 unchanged files | `bench: S7 snap by delta` |
+| Improvement 8 — `bench restore` | **done** | `bench: S8 restore a snap` |
+| Improvement 9 — demo inside reach (sharp edge 14) | **done** (lock + knife = T_tool × ROM files) | `bench: S9 demo inside reach` |
+| Improvement 10 — ROM owns the tables | **done** (`tests/rom/test_ops.py`, 45 rows) | `bench: S10 ROM ops table through the binary` |
+| Improvement 11 — retention for `sessions/` | **done** | `bench: S11 session retention` |
+
+Still open from the list below: sharp edges 12 (`T_session` never binds), 13 (`WAIT` is time only),
+15 (constant lamp byte), 16 (Python models C by tables), and the permanent-token half of 7.
+
+New edges found while implementing:
+
+- **Linked snaps share inodes.** After S7, one in-place write to a file under `sessions/<id>/snap-k/hold/`
+  changes every snap that links it. Only the owner and `TEST` children can write `sessions/`.
+  `restore` re-hashes before it moves anything, so damage is detected, not prevented.
+- **TEST post-conditions do not cover `sessions/`** beyond the token files. A crowned test could edit
+  a snap or a log without tripping M1. Next step: include `sessions/<id>/` MANIFEST + INDEX hashes in the
+  TEST board read.
+- **Default file quota vs `T_frame`.** 1024 *new* files in one step cost ~350 ms to snap on the test
+  disk (creation, not copying, dominates). The quota admits a step the frame then faults. Either the
+  default drops (~256) or `T_frame` becomes per-notch. Owner call.
+
 ---
 
 ## What already holds

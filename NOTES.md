@@ -1,5 +1,57 @@
 # NOTES
 
+## Session 3 — implementation pass (review → code)
+
+### Start
+
+- Head `a1bad86`, tree clean. `make test`: bus ok, 46 ROM + 51 harness, green, offline.
+
+### Shipped, in order
+
+| Item | Commit | Notes |
+|---|---|---|
+| M2 token identity | `bench: M2 token identity` | Landed before M1: M1 reuses the token pin. Regular file, runner's uid, not g/o-writable; (dev, ino, mtime) pinned; checked every frame. |
+| M1 TEST post-conditions | `bench: M1 test postconditions` | `main/`, `tests/rom/` hashes + raw token stats before/after each TEST. Fault → disarmed (exit 5), board not snapped, touched token renamed `.tainted-<id>`. `is_ring0` unchanged. |
+| M3 split the log | `bench: M3 split the log` | `out-<n>` per step, `out=` sha256 in MANIFEST. READ bytes moved out of the log too. |
+| M4 world lock | `bench: M4 world lock` | **fcntl, not flock** — `F_GETLK` names the holder pid, which is what `kill` needs as proof. Exit 7 when busy. `crashed` status. |
+| M6 file quota | `bench: M6 file quota` | Done before M5 so the status line could show it. Counts files + dirs. |
+| M5 status --line | `bench: M5 status --line, helper version pin` | Plus the cheap mailbox item: `PING` must answer `helper v0`. |
+| S7 snap by delta | `bench: S7 snap by delta` | Measured first: copy 344 ms vs link 8 ms per 1000 files on this disk. INDEX with ino/size/mtime/ctime. |
+| S8 restore | `bench: S8 restore a snap` | Owner command. Hash check before anything moves; old hold/ kept as `hold.before`. |
+| S9 demo | `bench: S9 demo inside reach` | `sessions/DEMO` lock, knife = 5 s × ROM files. |
+| S10 ops table | `bench: S10 ROM ops table through the binary` | 45 rows. Verified a flipped row fails. |
+| S11 retention | `bench: S11 session retention` | Keep 20; never CURRENT, `hold.before`, or non-session dirs. |
+
+Docs: README rewritten to the tree; `DESIGN_REVIEW.md` status block; new `EVOLUTION.md`, `TOOLBOX.md`.
+
+### S-items not shipped
+
+- **None.** S7–S11 all landed with tests. Nothing fought the five-verb ISA: `restore`, `status --line`,
+  retention and `demo` are owner commands; no intern op was added.
+
+### Found while implementing (recorded in DESIGN_REVIEW status block)
+
+- Linked snaps share inodes; a write under `sessions/` changes every linked snap (restore detects it).
+- TEST post-conditions do not yet cover `sessions/` beyond the token.
+- Default file quota (1024) vs `T_frame` (200 ms): 1024 **new** files in one step ≈ 350–390 ms to snap.
+  Owner call: lower the default or make `T_frame` per notch.
+- `WRITE` trims its payload, so indented code cannot be written line by line; `TOOLBOX.md` answers
+  with the pipe margin in `join`/`splice`.
+
+### End
+
+- `make test` from a clean tree: `bus_test: ok`, **50 ROM + 99 harness**, green, offline. `make e2e` green.
+- Every `tests/rom/*.py` passes `is_ring0`. No socket in ROM.
+- No sixth verb; mailbox words and supervisor words are refused by the parser (OPS_TABLE).
+- `supervisor/sandbox.c`, `sandbox.h`, `spec/`: not touched. No live model.
+
+### Exit codes now
+
+0 ok · 1 fault · 2 usage · 3 killed · 4 ROM changed · 5 not armed / disarmed / tainted ·
+6 helper missing/silent/lost/wrong version · 7 world busy / demo running.
+
+---
+
 ## Session 2 — design pass + four-seat sources
 
 ### Start
