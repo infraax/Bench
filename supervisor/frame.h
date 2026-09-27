@@ -83,6 +83,10 @@ int  child_run(const char *root, char *const argv[], Jail jail, char *out, size_
    not counted. links and devices are not board state, same as snap. adds into the outputs. */
 int  tree_count(const char *path, uint64_t *bytes, uint64_t *entries);
 
+/* a plain full copy of a board tree (regular files and dirs), no links. restore uses it:
+   hold/ is writable by tools, so it must never share an inode with a snap. */
+int  copy_board(const char *src, const char *dst);
+
 int  mkdirs(const char *path);
 int  write_atomic(const char *path, const char *text);
 int  path_join(char *out, size_t n, const char *a, const char *b);

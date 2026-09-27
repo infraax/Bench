@@ -25,4 +25,8 @@ void sha256_final(Sha256 *c, char hex[65]);   /* writes 64 hex chars + NUL */
  * returns 0 on success and writes hex[65]; -1 on error. */
 int tree_hash(const char *root, const char *const *paths, int npaths, char hex[65]);
 
+/* the same hash, with paths[i] read from under roots[i] but hashed under its own name.
+   restore uses it to check main/ (from the world) + hold/ (from a snap) against a MANIFEST. */
+int tree_hash_roots(const char *const *roots, const char *const *paths, int npaths, char hex[65]);
+
 #endif

@@ -609,6 +609,76 @@ class TestDeltaSnaps(unittest.TestCase):
         self.assertEqual(self.delta(w.snaps()[-1]), (1000, 0))
 
 
+class TestRestore(unittest.TestCase):
+    """bench restore <snap>: resume = load snap. verified before anything moves."""
+
+    def two_writes(self):
+        w = addWorld(self)
+        r = w.bench("run", w.script("WRITE fs hold/a.txt one\nWRITE fs hold/a.txt two\n"))
+        self.assertEqual(r.returncode, 0, r.stdout)
+        return w, w.state()["session"]
+
+    def test_restore_round_trip(self):
+        w, old = self.two_writes()
+        tree1 = re.search(r"^tree=(\S+)$", (w.session() / "snap-1" / "MANIFEST").read_text(), re.M)[1]
+        r = w.bench("restore", "snap-1")
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertEqual((w.root / "hold" / "a.txt").read_text(), "one\n")
+        new = w.session()
+        self.assertNotEqual(new.name, old)
+        self.assertEqual((new / "hold.before" / "a.txt").read_text(), "two\n")    # kept, not deleted
+        self.assertIn(f"tree={tree1}", (new / "snap-0" / "MANIFEST").read_text())
+        self.assertIn(f"restored_from={old}/snap-1", (new / "SESSION").read_text())
+        self.assertEqual(w.state()["status"], "restored")
+        # hold/ is the tools' to write: it must never share an inode with a snap
+        self.assertEqual((w.root / "hold" / "a.txt").stat().st_nlink, 1)
+        # and the world runs on from the restored board
+        self.assertEqual(w.bench("run", w.script("READ fs hold/a.txt\n")).returncode, 0)
+        self.assertEqual((w.session() / "out-1").read_text(), "one\n")
+
+    def test_named_session_snap(self):
+        w, old = self.two_writes()
+        self.assertEqual(w.bench("run", w.script("WAIT 1\n")).returncode, 0)
+        r = w.bench("restore", f"{old}/snap-1")
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertEqual((w.root / "hold" / "a.txt").read_text(), "one\n")
+
+    def test_damaged_snap_moves_nothing(self):
+        w, _ = self.two_writes()
+        (w.session() / "snap-1" / "hold" / "a.txt").write_text("forged\n")
+        r = w.bench("restore", "snap-1")
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("does not hash", r.stdout)
+        self.assertEqual((w.root / "hold" / "a.txt").read_text(), "two\n")
+
+    def test_main_changed_since_moves_nothing(self):
+        w, _ = self.two_writes()
+        (w.root / "main" / "hello.txt").write_text("edited by the owner\n")
+        r = w.bench("restore", "snap-1")
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertEqual((w.root / "hold" / "a.txt").read_text(), "two\n")
+
+    def test_snap_without_a_board_is_refused(self):
+        w = addWorld(self)
+        w.bench("run", "--hold-quota", "1", w.script("WRITE fs hold/a.txt too big\n"))
+        r = w.bench("restore", "snap-1")
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("holds no board", r.stdout)
+
+    def test_restore_needs_the_owner(self):
+        w, _ = self.two_writes()
+        w.disarm()
+        self.assertEqual(w.bench("restore", "snap-1").returncode, 5)
+        self.assertEqual((w.root / "hold" / "a.txt").read_text(), "two\n")
+
+    def test_bad_names(self):
+        w, old = self.two_writes()
+        for bad in ("../x/snap-1", "snap-", "snap-1x", f"{old}/../snap-1", "/snap-1", "MANIFEST"):
+            with self.subTest(bad=bad):
+                self.assertEqual(w.bench("restore", bad).returncode, 2)
+        self.assertEqual(w.bench("restore").returncode, 2)
+
+
 class TestOutFiles(unittest.TestCase):
     """the log is the supervisor's. tool output lives in out-<n>, pinned by the MANIFEST."""
 

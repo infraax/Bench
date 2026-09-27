@@ -237,6 +237,11 @@ static int copy_tree(const char *src, const char *dst, const char *rel, Delta *d
     return rc;
 }
 
+int copy_board(const char *src, const char *dst) {
+    Delta d = {0};
+    return copy_tree(src, dst, "", &d);
+}
+
 static int tree_walk(const char *path, uint64_t *bytes, uint64_t *entries, int top) {
     struct stat st;
     if (lstat(path, &st) != 0) return errno == ENOENT ? 0 : -1;

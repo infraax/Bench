@@ -793,6 +793,118 @@ static int cmd_demo(void) {
     return prefix(out, "GREEN") ? 0 : 1;
 }
 
+/* ---- restore: resume = load snap ----
+ * bench restore snap-<k> | <session>/snap-<k>
+ * an owner command, not an intern op: armed, world locked, ROM crowned. the snap must hold a
+ * board, and main/ (from the world) + hold/ (from the snap) must hash to its MANIFEST tree=
+ * before anything moves. the old hold/ is kept in sessions/<new>/hold.before, never deleted.
+ * the new session's s0 is the restored board. no frames run. */
+static int cmd_restore(int argc, char **argv) {
+    if (argc != 1) { fprintf(stderr, "usage: bench restore snap-<k> | <session>/snap-<k>\n"); return 2; }
+    char sid[128], sname[32], cdir[1024];
+    const char *arg = argv[0], *slash = strchr(arg, '/');
+    if (slash) {
+        size_t l = (size_t)(slash - arg);
+        if (l == 0 || l >= sizeof sid) { fprintf(stderr, "restore: bad session in %s\n", arg); return 2; }
+        memcpy(sid, arg, l);
+        sid[l] = 0;
+        snprintf(sname, sizeof sname, "%.31s", slash + 1);
+    } else {
+        if (current_dir(cdir, sizeof cdir, sid, sizeof sid)) { fprintf(stderr, "restore: no current session\n"); return 1; }
+        snprintf(sname, sizeof sname, "%.31s", arg);
+    }
+    char *end;
+    if (strncmp(sname, "snap-", 5) || !sname[5] || (strtoul(sname + 5, &end, 10), *end) ||
+        strchr(sid, '/') || strstr(sid, "..") || sid[0] == '.') {
+        fprintf(stderr, "restore: '%s' is not <session>/snap-<k>\n", arg);
+        return 2;
+    }
+    if (rom_ok() != 0) return 4;
+    TokenId tok;
+    char tw[256];
+    if (!arm_read(&tok, tw, sizeof tw)) { fprintf(stderr, "restore: not armed — %s\n", tw); return 5; }
+    char lp[1100];
+    int lock_fd = -1;
+    pid_t holder;
+    if (sessions_path(lp, sizeof lp, NULL) || mkdirs(lp)) return 1;
+    if (lock_take(&lock_fd, &holder) != 0) {
+        fprintf(stderr, "restore: world busy — sessions/LOCK held (pid %d)\n", (int)holder);
+        return 7;
+    }
+
+    char odir[1024], snapdir[1100], man[1200], buf[2048], tree[80];
+    if (sessions_path(odir, sizeof odir, sid) || path_join(snapdir, sizeof snapdir, odir, sname) ||
+        path_join(man, sizeof man, snapdir, "MANIFEST") || read_small(man, buf, sizeof buf)) {
+        fprintf(stderr, "restore: no snap %s/%s\n", sid, sname);
+        return 1;
+    }
+    if (!kv(buf, "tree", tree, sizeof tree) || strlen(tree) != 64) {
+        fprintf(stderr, "restore: %s/%s holds no board (tree=%s)\n", sid, sname, tree[0] ? tree : "?");
+        return 1;
+    }
+    const char *paths[] = {"main", "hold"};
+    const char *from_snap[] = {g_root, snapdir};
+    char hex[65];
+    if (tree_hash_roots(from_snap, paths, 2, hex) != 0 || strcmp(hex, tree)) {
+        fprintf(stderr, "restore: %s/%s does not hash to its MANIFEST tree (snap damaged, or main/ "
+                        "changed since). nothing moved.\n", sid, sname);
+        return 1;
+    }
+
+    char id[64], dir[1024], stage[1100], shold[1200], whold[1100], before[1100], src[1200], path[1100];
+    snprintf(id, sizeof id, "%lld-%d", (long long)time(NULL), (int)getpid());
+    if (sessions_path(dir, sizeof dir, id) || mkdirs(dir) || path_join(stage, sizeof stage, dir, "stage") ||
+        mkdirs(stage) || path_join(shold, sizeof shold, stage, "hold") || path_join(src, sizeof src, snapdir, "hold") ||
+        path_join(whold, sizeof whold, g_root, "hold") || path_join(before, sizeof before, dir, "hold.before"))
+        return 1;
+    if (mkdir(shold, 0755) != 0 || copy_board(src, shold) != 0) {
+        fprintf(stderr, "restore: cannot stage the snap's hold/. nothing moved.\n");
+        return 1;
+    }
+    const char *from_stage[] = {g_root, stage};
+    if (tree_hash_roots(from_stage, paths, 2, hex) != 0 || strcmp(hex, tree)) {
+        fprintf(stderr, "restore: staged copy does not match. nothing moved.\n");
+        return 1;
+    }
+    if (rename(whold, before) != 0 && errno != ENOENT) {
+        fprintf(stderr, "restore: cannot move hold/ aside: %s. nothing moved.\n", strerror(errno));
+        return 1;
+    }
+    if (rename(shold, whold) != 0) {
+        fprintf(stderr, "restore: cannot place the restored hold/: %s — putting the old one back\n", strerror(errno));
+        rename(before, whold);
+        return 1;
+    }
+    rmdir(stage);
+
+    if (path_join(path, sizeof path, dir, "log")) return 1;
+    g_log = open(path, O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0644);
+    if (g_log >= 0) dprintf(g_log, "RESTORE %s/%s tree=%s old hold/ -> hold.before\n", sid, sname, tree);
+    static Session s;
+    if (session_start(&s, g_root, dir, N_MAX_DEFAULT, N_MAX_DEFAULT, 0, 0, 0,
+                      HOLD_QUOTA_BYTES, HOLD_QUOTA_FILES) != 0) {
+        fprintf(stderr, "restore: hold/ restored, but session s0 failed\n");
+        return 1;
+    }
+    char s0[1200], m0[2048], t0[80];
+    if (path_join(s0, sizeof s0, dir, "snap-0/MANIFEST") || read_small(s0, m0, sizeof m0) ||
+        !kv(m0, "tree", t0, sizeof t0) || strcmp(t0, tree)) {
+        fprintf(stderr, "restore: new s0 does not match the restored snap\n");
+        return 1;
+    }
+    if (path_join(path, sizeof path, dir, "SESSION") == 0) {
+        int sf = open(path, O_WRONLY | O_APPEND | O_CLOEXEC);
+        if (sf >= 0) { dprintf(sf, "restored_from=%s/%s\n", sid, sname); close(sf); }
+    }
+    session_state(&s, "restored");
+    char text[160], cur[1100];
+    snprintf(text, sizeof text, "%s\n", id);
+    if (sessions_path(cur, sizeof cur, "CURRENT") || write_atomic(cur, text)) return 1;
+    printf("RESTORE %s/%s -> session %s s0 tree=%.12s (old hold/ kept in sessions/%s/hold.before)\n",
+           sid, sname, id, tree, id);
+    return 0;
+}
+
 static int cmd_snap_ls(void) {
     char dir[1024], id[128];
     if (current_dir(dir, sizeof dir, id, sizeof id)) { fprintf(stderr, "snap-ls: no session\n"); return 1; }
@@ -822,8 +934,9 @@ int main(int argc, char **argv) {
     if (!strcmp(argv[1], "kill")) return cmd_kill();
     if (!strcmp(argv[1], "demo")) return cmd_demo();
     if (!strcmp(argv[1], "snap-ls")) return cmd_snap_ls();
+    if (!strcmp(argv[1], "restore")) return cmd_restore(argc - 2, argv + 2);
 usage:
     fprintf(stderr, "usage: bench status [--line] | run [--n N] [--hold-quota BYTES] [--hold-files N] [script|-]"
-                    " | kill | demo | snap-ls\n");
+                    " | kill | demo | snap-ls | restore snap-<k>\n");
     return 2;
 }
