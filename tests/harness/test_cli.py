@@ -679,6 +679,47 @@ class TestRestore(unittest.TestCase):
         self.assertEqual(w.bench("restore").returncode, 2)
 
 
+class TestDemo(unittest.TestCase):
+    """demo: a knife sized to the ROM, a lock that proves its pid to kill."""
+
+    def slow_demo(self, w):
+        (w.root / "tools" / "test_runner.py").write_text("import time\ntime.sleep(20)\nprint('GREEN 0 tests')\n")
+        proc = subprocess.Popen([str(BENCH), "demo"], cwd=IMAGE, env=w.env,
+                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        self.addCleanup(lambda: proc.poll() is None and proc.kill())
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline and not (w.root / "sessions" / "DEMO").exists():
+            time.sleep(0.02)
+        time.sleep(0.3)
+        return proc
+
+    def test_knife_is_t_tool_per_rom_file(self):
+        w = addWorld(self)
+        roms = len(list((w.root / "tests" / "rom").glob("test_*.py")))
+        r = w.bench("demo")
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertIn(f"demo: roms={roms} knife={5000 * roms}ms", r.stdout)
+
+    def test_kill_reaches_a_running_demo(self):
+        w = addWorld(self)
+        proc = self.slow_demo(w)
+        t0 = time.monotonic()
+        r = w.bench("kill")
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertIn(f"KILL demo pid {proc.pid}", r.stdout)
+        out, _ = proc.communicate(timeout=10)
+        self.assertLess(time.monotonic() - t0, 2.0)
+        self.assertEqual(proc.returncode, 3, out)
+        self.assertIn("HALT demo killed", out)
+
+    def test_one_demo_at_a_time(self):
+        w = addWorld(self)
+        self.slow_demo(w)
+        r = w.bench("demo")
+        self.assertEqual(r.returncode, 7, r.stdout)
+        self.assertIn("already running", r.stdout)
+
+
 class TestOutFiles(unittest.TestCase):
     """the log is the supervisor's. tool output lives in out-<n>, pinned by the MANIFEST."""
 

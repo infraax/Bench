@@ -13,6 +13,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
+#include <dirent.h>
 #include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
@@ -415,13 +416,11 @@ static Mailbox g_mb = {-1, -1, -1};
  * that pid is the live run. the lock dies with the process, so a crashed run holds nothing.
  * note: POSIX locks drop when the holder closes ANY fd on the file — run opens LOCK once. */
 
-static int lock_path(char *p, size_t n) { return sessions_path(p, n, "LOCK"); }
-
-/* take the lock. 0 held; -1 busy (holder in *pid, if known); -2 cannot open. */
-static int lock_take(int *fd_out, pid_t *pid) {
+/* take the lock on sessions/<name>. 0 held; -1 busy (holder in *pid, if known); -2 cannot open. */
+static int lock_take_at(const char *name, int *fd_out, pid_t *pid) {
     char p[1100];
     *pid = 0;
-    if (lock_path(p, sizeof p)) return -2;
+    if (sessions_path(p, sizeof p, name)) return -2;
     int fd = open(p, O_RDWR | O_CREAT | O_CLOEXEC, 0644);
     if (fd < 0) return -2;
     struct flock fl = {.l_type = F_WRLCK, .l_whence = SEEK_SET, .l_start = 0, .l_len = 0};
@@ -435,10 +434,12 @@ static int lock_take(int *fd_out, pid_t *pid) {
     return 0;
 }
 
-/* the pid of the live run holding the world, or 0 if nobody does. */
-static pid_t lock_holder(void) {
+static int lock_take(int *fd_out, pid_t *pid) { return lock_take_at("LOCK", fd_out, pid); }
+
+/* the pid of the live process holding sessions/<name>, or 0 if nobody does. */
+static pid_t lock_holder_at(const char *name) {
     char p[1100];
-    if (lock_path(p, sizeof p)) return 0;
+    if (sessions_path(p, sizeof p, name)) return 0;
     int fd = open(p, O_RDONLY | O_CLOEXEC);
     if (fd < 0) return 0;
     struct flock q = {.l_type = F_WRLCK, .l_whence = SEEK_SET, .l_start = 0, .l_len = 0};
@@ -446,6 +447,8 @@ static pid_t lock_holder(void) {
     close(fd);
     return pid;
 }
+
+static pid_t lock_holder(void) { return lock_holder_at("LOCK"); }
 
 /* ---- commands ---- */
 
@@ -760,7 +763,14 @@ static int cmd_run(int argc, char **argv) {
 
 static int cmd_kill(void) {
     char dir[1024], id[128], path[1100], buf[1024], sn[32];
-    if (current_dir(dir, sizeof dir, id, sizeof id)) { fprintf(stderr, "kill: no session\n"); return 1; }
+    /* a live demo is proven by its own lock, like a run by the world lock */
+    pid_t demo = lock_holder_at("DEMO");
+    if (demo > 0) { kill(demo, SIGTERM); printf("KILL demo pid %d\n", (int)demo); }
+    if (current_dir(dir, sizeof dir, id, sizeof id)) {
+        if (demo > 0) return 0;
+        fprintf(stderr, "kill: no session\n");
+        return 1;
+    }
     if (path_join(path, sizeof path, dir, "KILL") || write_atomic(path, "KILL\n")) return 1;
     /* signal only the live run: the PID file must name the process holding the world lock.
        a PID file left by a crash names nobody we may signal — that number may be reused. */
@@ -778,13 +788,49 @@ static int cmd_kill(void) {
     return 0;
 }
 
+/* demo: one green light for the whole ROM. not a session and no frames, but inside reach:
+   a lock (sessions/DEMO) proves its pid to `kill`, and its knife is T_tool per ROM test file
+   rather than a flat five minutes. */
+#define T_TOOL_DEMO_MS 5000u
+
+static unsigned rom_files(void) {
+    char p[1100];
+    unsigned n = 0;
+    if (path_join(p, sizeof p, g_root, "tests/rom")) return 0;
+    DIR *d = opendir(p);
+    if (!d) return 0;
+    struct dirent *e;
+    while ((e = readdir(d)) != NULL)
+        if (prefix(e->d_name, "test_") && suffix(e->d_name, ".py")) n++;
+    closedir(d);
+    return n;
+}
+
 static int cmd_demo(void) {
     if (rom_ok() != 0) return 4;
+    char sp[1100];
+    int lock_fd = -1;
+    pid_t holder;
+    if (sessions_path(sp, sizeof sp, NULL) || mkdirs(sp)) return 1;
+    if (lock_take_at("DEMO", &lock_fd, &holder) != 0) {
+        fprintf(stderr, "demo: already running (pid %d)\n", (int)holder);
+        return 7;
+    }
+    struct sigaction sa;
+    memset(&sa, 0, sizeof sa);
+    sa.sa_handler = on_signal;
+    sigaction(SIGTERM, &sa, NULL);
+    sigaction(SIGINT, &sa, NULL);
+    unsigned roms = rom_files();
+    uint32_t knife = T_TOOL_DEMO_MS * (roms ? roms : 1);
+    fprintf(stderr, "demo: roms=%u knife=%ums\n", roms, knife);
     char *argv[] = {"python3", "tools/test_runner.py", NULL};
     char out[256] = "";
-    int rc = child_run(g_root, argv, JAIL_NET_ONLY, out, sizeof out, NULL, 300000, -1, -1);
+    int rc = child_run(g_root, argv, JAIL_NET_ONLY, out, sizeof out, NULL, knife, -1, -1);
     char *nl = strchr(out, '\n');
     if (nl) *nl = 0;
+    if (rc == -3) { printf("HALT demo killed\n"); return 3; }
+    if (rc == -2) { printf("RED knife>%ums\n", knife); return 1; }
     if (rc != 0) {
         printf("%s\n", prefix(out, "RED") ? out : "RED");
         return 1;
