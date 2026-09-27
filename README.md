@@ -29,7 +29,7 @@ The spec names its sources `harness/*.{py,c,h}`; in this tree they live in `isa/
 `bench run` starts only if the owner armed it. Either:
 
 - `BENCH_TOKEN` names an existing regular file, **or**
-- `sessions/current/token` exists under the world root (`BENCH_ROOT`, default `.`).
+- `sessions/OWNER_TOKEN` (a file) exists under the world root (`BENCH_ROOT`, default `.`).
 
 Presence only; the content is not read. Without a token, `run` exits **5** before any session
 dir, frame or lamp exists; `status` stays dark. `demo` and `status` need no token.
@@ -67,7 +67,7 @@ own exec). A tool can start other programs; they inherit the same limits.
 ```
 make test                               # ring 0 + harness, offline, radio unplugged
 make e2e                                # fixture intern -> frames -> snaps -> demo (arms a scratch world)
-mkdir -p sessions/current && : > sessions/current/token   # arm (owner)
+: > sessions/OWNER_TOKEN                # arm (owner); make clean keeps it, rm to disarm
 ./supervisor/bench run [--n N] script   # one opcode per frame, N <= 8
 ./supervisor/bench status | kill | demo | snap-ls
 ```

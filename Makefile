@@ -37,8 +37,8 @@ demo: supervisor/bench
 
 # fixture intern end to end, in a scratch world under sessions/ (gitignored)
 e2e: supervisor/bench
-	rm -rf $(E2E) && mkdir -p $(E2E)/main $(E2E)/hold $(E2E)/tests $(E2E)/sessions/current
-	: > $(E2E)/sessions/current/token   # you, running make, arm the scratch world
+	rm -rf $(E2E) && mkdir -p $(E2E)/main $(E2E)/hold $(E2E)/tests $(E2E)/sessions
+	: > $(E2E)/sessions/OWNER_TOKEN   # you, running make, arm the scratch world
 	cp -r supervisor tools isa $(E2E)/ && cp -r tests/rom $(E2E)/tests/rom
 	printf 'hello bench\n' > $(E2E)/main/hello.txt
 	printf 'READ  fs main/hello.txt\nWRITE fs hold/out.txt\nEXEC  tools/hash.py hold/out.txt\nTEST  PURE tests/rom/test_isa.py\nWAIT  1\n' > $(E2E)/touch.ops
@@ -48,6 +48,6 @@ e2e: supervisor/bench
 
 clean:
 	rm -f supervisor/bench supervisor/romhash $(ROMH)
-	find sessions -mindepth 1 ! -name .gitkeep -exec rm -rf {} +
+	find sessions -mindepth 1 ! -name .gitkeep ! -name OWNER_TOKEN -exec rm -rf {} +   # clean does not disarm
 
 .PHONY: all test demo e2e clean

@@ -89,7 +89,7 @@ Step.__delattr__ = _no_delete
 # the intern's WRITE rule, as the C parser applies it (supervisor/main.c parse_line).
 # relative, no climbing, and only quarantine or drafts. everything else is Ring 0 or the owner's.
 INTERN_WRITE_ROOTS = ("hold/", "proposed/")
-OWNER_TOKEN = "sessions/current/token"   # the owner arms a session here; never the intern
+OWNER_TOKEN = "sessions/OWNER_TOKEN"     # the owner arms a session here; never the intern
 
 def intern_may_write(path: str) -> bool:
     return (isinstance(path, str) and path != "" and not path.startswith("/")

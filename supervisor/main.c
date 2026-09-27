@@ -344,12 +344,13 @@ static int rom_ok(void) {
 /* ---- session arm: the owner's token, v0 ----
  *
  * run refuses to start unless the owner armed it: BENCH_TOKEN names an existing regular
- * file, or sessions/current/token exists under the world root. presence only, no content.
+ * file, or sessions/OWNER_TOKEN exists under the world root. presence only, no content.
  * the token is checked here, in the supervisor, before any session dir, frame or lamp.
- * tools cannot mint it: WRITE takes hold/ and proposed/ only, and tool children are
- * write-limited to the same places. stands in for a later hardware key; nothing more. */
+ * the intern cannot mint it: WRITE takes hold/ and proposed/ only, and EXEC children are
+ * write-limited to hold/ and proposed/. TEST children are not write-limited; they run ROM
+ * code, which a human crowned. stands in for a later hardware key; nothing more. */
 
-#define TOKEN_REL "sessions/current/token"
+#define TOKEN_REL "sessions/OWNER_TOKEN"
 
 static int is_file(const char *p) {
     struct stat st;

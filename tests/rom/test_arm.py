@@ -12,12 +12,13 @@ WRITE_TABLE = [
     ("hold/deep/dir/out.txt", True),
     ("proposed/tests/test_x.py", True),
     (OWNER_TOKEN, False),
-    ("sessions/current", False),
+    ("sessions/owner_token", False),       # case-insensitive disks see the same file
     ("sessions/CURRENT", False),
-    ("hold/../sessions/current/token", False),
-    ("proposed/../../sessions/current/token", False),
-    ("/sessions/current/token", False),
-    ("./sessions/current/token", False),
+    ("hold/../sessions/OWNER_TOKEN", False),
+    ("proposed/../../sessions/OWNER_TOKEN", False),
+    ("/sessions/OWNER_TOKEN", False),
+    ("./sessions/OWNER_TOKEN", False),
+    ("hold/OWNER_TOKEN", True),            # a file named like the token, inside quarantine, arms nothing
     ("main/hello.txt", False),
     ("tests/rom/test_isa.py", False),
     ("holdings/x", False),
@@ -28,6 +29,14 @@ WRITE_TABLE = [
 class TestArm(unittest.TestCase):
     def test_token_lives_outside_intern_roots(self):
         self.assertFalse(OWNER_TOKEN.startswith(INTERN_WRITE_ROOTS))
+
+    def test_token_is_one_file_next_to_current(self):
+        # a file, not a dir: no sessions/current/ to collide with sessions/CURRENT on a
+        # case-insensitive disk, and the two names differ after case folding.
+        parts = OWNER_TOKEN.split("/")
+        self.assertEqual(parts[0], "sessions")
+        self.assertEqual(len(parts), 2)
+        self.assertNotEqual(parts[1].casefold(), "current")
 
     def test_fixture_cannot_mint_the_token(self):
         for path, ok in WRITE_TABLE:

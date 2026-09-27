@@ -268,6 +268,15 @@ class TestArm(unittest.TestCase):
         w.token.mkdir(parents=True)
         self.assert_refused(w, w.bench("run", w.script("WAIT 1\n")))
 
+    def test_old_token_path_does_not_arm(self):
+        # the v0 path sessions/current/token was renamed; a leftover must not arm a run.
+        w = addWorld(self)
+        w.disarm()
+        old = w.root / "sessions" / "current" / "token"
+        old.parent.mkdir(parents=True)
+        old.write_text("")
+        self.assert_refused(w, w.bench("run", w.script("WAIT 1\n")))
+
     def test_demo_and_status_need_no_token(self):
         w = addWorld(self)
         w.disarm()
@@ -276,7 +285,7 @@ class TestArm(unittest.TestCase):
 
     def test_c_parser_agrees_with_rom_write_table(self):
         # same table as tests/rom/test_arm.py, run through the C parser. arm by env so
-        # sessions/current/token starts absent and must still be absent after.
+        # sessions/OWNER_TOKEN starts absent and must still be absent after.
         sys.path.insert(0, str(IMAGE / "tests" / "rom"))
         from test_arm import WRITE_TABLE
         for path, ok in WRITE_TABLE:
