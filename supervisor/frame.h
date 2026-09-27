@@ -10,6 +10,12 @@
 #define N_MAX_DEFAULT 8
 #endif
 
+/* hold/ budget per session: bytes hold/ may grow past its size at s0. counted after every
+   tool (WRITE and anything an EXEC'd tool wrote). over quota is a failed step, snapped. */
+#ifndef HOLD_QUOTA_BYTES
+#define HOLD_QUOTA_BYTES 65536u
+#endif
+
 /* same numbering as isa/hotz_isa.py Op. five. there is no sixth. */
 typedef enum { OP_READ=1, OP_WRITE, OP_EXEC, OP_TEST, OP_WAIT } Op;
 
@@ -19,6 +25,7 @@ typedef struct {
     uint32_t t_tool_ms;   /* T_tool:  a child's wall clock. python boot lives here, not in the frame. */
     uint32_t t_sess_ms;
     uint64_t t0_ns, last_snap_ns;
+    uint64_t hold_base;      /* bytes in hold/ at session start; the quota counts growth past it */
     Bus      bus;            /* woz bits — lamps live here, we do not keep a second copy */
     uint32_t k;              /* next snap index: snap-<k>/ */
     char     snap_id[24];
@@ -41,6 +48,9 @@ int  session_state(const Session *s, const char *status);
    err_fd >= 0 receives the child's stderr, otherwise it is inherited. */
 int  child_run(const char *root, char *const argv[], Jail jail, char *out, size_t outsz,
                uint64_t *nbytes, uint32_t timeout_ms, int log_fd, int err_fd);
+
+/* bytes in regular files under path (links and devices are not counted, same as snap). */
+int  tree_bytes(const char *path, uint64_t *out);
 
 int  mkdirs(const char *path);
 int  write_atomic(const char *path, const char *text);

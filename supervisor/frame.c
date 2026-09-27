@@ -156,6 +156,30 @@ static int copy_tree(const char *src, const char *dst) {
     return rc;
 }
 
+int tree_bytes(const char *path, uint64_t *out) {
+    struct stat st;
+    if (lstat(path, &st) != 0) return errno == ENOENT ? 0 : -1;
+    if (S_ISREG(st.st_mode)) { *out += (uint64_t)st.st_size; return 0; }
+    if (!S_ISDIR(st.st_mode)) return 0;
+    DIR *d = opendir(path);
+    if (!d) return -1;
+    int rc = 0;
+    struct dirent *e;
+    while (rc == 0 && (e = readdir(d)) != NULL) {
+        if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, "..")) continue;
+        char p[1024];
+        rc = path_join(p, sizeof p, path, e->d_name) ? -1 : tree_bytes(p, out);
+    }
+    closedir(d);
+    return rc;
+}
+
+static int hold_bytes(const Session *s, uint64_t *out) {
+    char p[1024];
+    *out = 0;
+    return path_join(p, sizeof p, s->root, "hold") ? -1 : tree_bytes(p, out);
+}
+
 int session_state(const Session *s, const char *status) {
     char path[1024], text[1200];
     const char *id = strrchr(s->dir, '/');
@@ -218,6 +242,19 @@ int frame(Session *s, Op op, Tool tool, void *arg, int k_due) {
     if (tool) rc = tool(s, arg);
     uint64_t tool_ms = (nowns() - tool_t0) / 1000000ull;
 
+    /* hold quota: a successful tool that grew hold/ past budget is a failed step. */
+    if (rc == 0) {
+        uint64_t hb;
+        if (hold_bytes(s, &hb) != 0) {
+            snprintf(s->ev, sizeof s->ev, "fault=hold-unreadable");
+            rc = 1;
+        } else if (hb > s->hold_base && hb - s->hold_base > HOLD_QUOTA_BYTES) {
+            snprintf(s->ev, sizeof s->ev, "fault=hold-quota grew=%llu quota=%u",
+                     (unsigned long long)(hb - s->hold_base), (unsigned)HOLD_QUOTA_BYTES);
+            rc = 1;
+        }
+    }
+
     uint64_t c0 = nowns();   /* the C thread's own work starts here */
     size_t l = strlen(s->ev);
     snprintf(s->ev + l, sizeof s->ev - l, " tool_ms=%llu", (unsigned long long)tool_ms);
@@ -251,6 +288,7 @@ int session_start(Session *s, const char *root, const char *dir,
     s->t0_ns = nowns();
     snprintf(s->root, sizeof s->root, "%s", root);
     snprintf(s->dir, sizeof s->dir, "%s", dir);
+    if (hold_bytes(s, &s->hold_base) != 0) return -1;
 
     /* radio off by default. no eyes, no judge. fs and tty wired. */
     s->bus.plug = (uint8_t)((1u << SLOT_N) - 1);
@@ -262,11 +300,13 @@ int session_start(Session *s, const char *root, const char *dir,
     s->bus.lamps = lamp_set(s->bus.lamps, LAMP_HOLD); /* long notch starts in hold. main is a promotion. */
 
     /* frozen for the session. changing these is a new session. */
-    char path[1024], text[256];
+    char path[1024], text[384];
     if (mkdirs(dir) || path_join(path, sizeof path, dir, "SESSION")) return -1;
     snprintf(text, sizeof text,
-             "N_max=%u\nK=%u\nT_frame_ms=%u\nT_tool_ms=%u\nT_session_ms=%u\nplug=0x%02x\n",
-             s->n_max, s->k_snap, s->t_step_ms, s->t_tool_ms, s->t_sess_ms, s->bus.plug);
+             "N_max=%u\nK=%u\nT_frame_ms=%u\nT_tool_ms=%u\nT_session_ms=%u\nplug=0x%02x\n"
+             "hold_quota=%u\nhold_base=%llu\n",
+             s->n_max, s->k_snap, s->t_step_ms, s->t_tool_ms, s->t_sess_ms, s->bus.plug,
+             (unsigned)HOLD_QUOTA_BYTES, (unsigned long long)s->hold_base);
     if (write_atomic(path, text)) return -1;
     return snap(s, "s0");
 }

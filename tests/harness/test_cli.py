@@ -216,6 +216,50 @@ class TestBoard(unittest.TestCase):
         self.assertIn("T_tool_ms=", sess)
 
 
+def hold_quota():
+    hdr = (IMAGE / "supervisor" / "frame.h").read_text()
+    return int(re.search(r"#define HOLD_QUOTA_BYTES (\d+)u", hdr).group(1))
+
+
+class TestHoldQuota(unittest.TestCase):
+    """hold/ may grow by HOLD_QUOTA_BYTES per session. over is a failed step, not a hang."""
+
+    def writer(self, w, nbytes, name="fill.py"):
+        return w.tool(name, f"open('hold/fill.bin', 'wb').write(b'x' * {nbytes})\n")
+
+    def test_over_quota_is_a_failed_step(self):
+        w = addWorld(self)
+        prog = self.writer(w, hold_quota() + 1)
+        r = w.bench("run", w.script(f"EXEC {prog}\nWAIT 1\n"), timeout=30)
+        self.assertNotEqual(r.returncode, 0, r.stdout)
+        self.assertIn("hold-quota", r.stdout)
+        self.assertNotIn("MAIN", r.stdout)
+        st = w.state()
+        self.assertEqual((st["status"], st["n"]), ("fault", "1"))   # WAIT never ran
+        self.assertEqual(len(w.snaps()), 2)                          # the failed step was snapped
+        self.assertIn("fault=hold-quota", (w.snaps()[-1] / "MANIFEST").read_text())
+
+    def test_at_quota_is_legal(self):
+        w = addWorld(self)
+        prog = self.writer(w, hold_quota())
+        r = w.bench("run", w.script(f"EXEC {prog}\n"), timeout=30)
+        self.assertEqual(r.returncode, 0, r.stdout)
+
+    def test_quota_counts_growth_not_old_hold(self):
+        # a hold/ left over from an earlier session does not block the next one.
+        w = addWorld(self)
+        (w.root / "hold" / "old.bin").write_bytes(b"y" * (2 * hold_quota()))
+        r = w.bench("run", w.script("WRITE fs hold/note.txt still fits\n"))
+        self.assertEqual(r.returncode, 0, r.stdout)
+
+    def test_quota_is_frozen_in_session_file(self):
+        w = addWorld(self)
+        self.assertEqual(w.bench("run", w.script("WAIT 1\n")).returncode, 0)
+        sess = (w.session() / "SESSION").read_text()
+        self.assertIn(f"hold_quota={hold_quota()}\n", sess)
+        self.assertIn("hold_base=", sess)
+
+
 class TestCage(unittest.TestCase):
     """the OS cage the source predicate cannot be: seccomp, landlock, rom-hash."""
 
