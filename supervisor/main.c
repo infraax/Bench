@@ -577,6 +577,14 @@ static int cmd_run(int argc, char **argv) {
             rc = 3;
             break;
         }
+        if (fr != 0 && s.tainted) {
+            /* a TEST moved what it must only read: the board is suspect, the run is disarmed */
+            session_state(&s, "disarmed");
+            dprintf(g_log, "TAINT %s\n", s.ev);
+            fprintf(stderr, "FAULT line %d: %s — disarmed\n", prog[i].line, s.ev);
+            rc = 5;
+            break;
+        }
         if (fr != 0) {
             session_state(&s, "fault");
             fprintf(stderr, "FAULT line %d: %s\n", prog[i].line, s.ev);

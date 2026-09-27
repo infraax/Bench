@@ -438,6 +438,70 @@ for line in c.makefile("rb"):
 """
 
 
+class TestPostconditions(unittest.TestCase):
+    """a TEST step reads the board. one that moves main/, ROM or the token is a fault, and disarms."""
+
+    def runner(self, w, body):
+        # fixture runner: reports GREEN, and does `body` first. stands in for a crowned test
+        # that touches what it must only read.
+        (w.root / "tools" / "test_runner.py").write_text(body + "\nprint('GREEN 1 tests')\n")
+
+    def assert_tainted(self, w, r, what):
+        self.assertEqual(r.returncode, 5, r.stdout)
+        self.assertIn(f"moved={what}", r.stdout)
+        self.assertIn("disarmed", r.stdout)
+        self.assertEqual(w.state()["status"], "disarmed")
+        man = (w.snaps()[-1] / "MANIFEST").read_text()
+        self.assertIn("tree=skipped:tainted", man)
+        self.assertFalse((w.snaps()[-1] / "hold").exists())
+        self.assertIn("TAINT", (w.session() / "log").read_text())
+
+    def test_clean_test_passes(self):
+        w = addWorld(self)
+        r = w.bench("run", w.script("TEST PURE tests/rom/test_isa.py\nWAIT 1\n"))
+        self.assertEqual(r.returncode, 0, r.stdout)
+
+    def test_moving_main_disarms(self):
+        w = addWorld(self)
+        self.runner(w, "open('main/moved.txt', 'w').write('x')")
+        r = w.bench("run", w.script("TEST PURE tests/rom/test_isa.py\nWAIT 1\n"))
+        self.assert_tainted(w, r, "main")
+        self.assertEqual(w.state()["n"], "1")          # WAIT never ran
+
+    def test_moving_rom_disarms(self):
+        w = addWorld(self)
+        self.runner(w, "open('tests/rom/test_isa.py', 'a').write('# moved\\n')")
+        self.assert_tainted(w, w.bench("run", w.script("TEST PURE tests/rom/test_isa.py\n")), "rom")
+
+    def test_minting_the_token_disarms_and_quarantines_it(self):
+        w = addWorld(self)
+        w.disarm()
+        key = w.root / "owner.key"
+        key.write_text("")
+        w.env["BENCH_TOKEN"] = str(key)
+        self.runner(w, "open('sessions/OWNER_TOKEN', 'w').write('')")
+        r = w.bench("run", w.script("TEST PURE tests/rom/test_isa.py\n"))
+        self.assert_tainted(w, r, "token")
+        self.assertFalse(w.token.exists(), "a minted token was left in place")
+        self.assertEqual(len(list((w.root / "sessions").glob("OWNER_TOKEN.tainted-*"))), 1)
+        del w.env["BENCH_TOKEN"]
+        self.assertEqual(w.bench("run", w.script("WAIT 1\n")).returncode, 5)   # it arms nothing
+
+    def test_touching_the_owner_token_disarms(self):
+        w = addWorld(self)
+        self.runner(w, "import os\nst = os.stat('sessions/OWNER_TOKEN')\n"
+                       "os.utime('sessions/OWNER_TOKEN', ns=(st.st_atime_ns, st.st_mtime_ns + 10**9))")
+        r = w.bench("run", w.script("TEST PURE tests/rom/test_isa.py\n"))
+        self.assert_tainted(w, r, "token")
+        self.assertFalse(w.token.exists())
+
+    def test_exec_is_not_held_to_test_postconditions(self):
+        # EXEC writes hold/ by design; the post-condition is TEST's contract, not EXEC's.
+        w = addWorld(self)
+        w.tool("h.py", "open('hold/x', 'w').write('x')\n")
+        self.assertEqual(w.bench("run", w.script("EXEC tools/h.py\n")).returncode, 0)
+
+
 class TestMailbox(unittest.TestCase):
     """bench <-> bench-helper: PING, ARM_OK, FRAME_OK over a unix socket in sessions/<id>/."""
 

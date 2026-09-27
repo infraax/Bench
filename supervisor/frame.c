@@ -15,6 +15,7 @@
 #include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -196,13 +197,62 @@ int session_state(const Session *s, const char *status) {
     return write_atomic(path, text);
 }
 
+/* ---- TEST post-conditions ----
+ * a pure test reads the board; it does not change it. whatever its source said, a TEST
+ * step that moved main/ or tests/rom/, or created, replaced or touched the owner token,
+ * is a fault. the token is checked raw (any file at the path), not by the arm rule. */
+
+typedef struct { int exists; dev_t dev; ino_t ino; struct timespec mtime; off_t size; } Raw;
+
+static void raw_stat(const char *p, Raw *r) {
+    struct stat st;
+    memset(r, 0, sizeof *r);
+    if (!p || !*p || lstat(p, &st) != 0) return;
+    r->exists = 1;
+    r->dev = st.st_dev;
+    r->ino = st.st_ino;
+    r->mtime = st.st_mtim;
+    r->size = st.st_size;
+}
+
+static int raw_same(const Raw *a, const Raw *b) {
+    return a->exists == b->exists && (!a->exists ||
+           (a->dev == b->dev && a->ino == b->ino && a->size == b->size &&
+            a->mtime.tv_sec == b->mtime.tv_sec && a->mtime.tv_nsec == b->mtime.tv_nsec));
+}
+
+typedef struct { char main_h[65], rom_h[65]; Raw tok, env; } Board;
+
+static int board_read(const Session *s, Board *b) {
+    const char *m[] = {"main"}, *r[] = {"tests/rom"};
+    char tp[1024];
+    if (tree_hash(s->root, m, 1, b->main_h) || tree_hash(s->root, r, 1, b->rom_h)) return -1;
+    if (path_join(tp, sizeof tp, s->root, TOKEN_REL)) return -1;
+    raw_stat(tp, &b->tok);
+    raw_stat(getenv("BENCH_TOKEN"), &b->env);
+    return 0;
+}
+
+/* the token a TEST step touched is not the owner's any more: move it aside, never delete it. */
+static void quarantine_token(const Session *s) {
+    char tp[1024], q[1200];
+    const char *id = strrchr(s->dir, '/');
+    id = id ? id + 1 : s->dir;
+    if (path_join(tp, sizeof tp, s->root, TOKEN_REL)) return;
+    if (snprintf(q, sizeof q, "%s.tainted-%.64s", tp, id) >= (int)sizeof q) return;
+    if (rename(tp, q) != 0 && errno != ENOENT) { /* the gate still refuses: token_same fails */ }
+}
+
 /* always snapshot, then decide if that snap is worth keeping on a cadence.
    skipping the write because "nothing changed" is how hidden state is born.
    hash tree -> manifest -> atomic rename.
-   board=0 is for a step that broke the hold quota: the manifest and evidence are written,
-   the oversized board is not hashed or copied. the last good board is the snap before. */
-static int snap_board(Session *s, const char *why, int board) {
-    char hash[65] = "skipped:over-quota", tmp[1024], fin[1024], name[64], path[1100], man[1024];
+   skip != NULL is for a step whose board must not be kept (over quota, or a TEST that broke
+   its post-conditions): manifest and evidence are written, the board is not hashed or copied,
+   and tree= says why. the last good board is the snap before. */
+static int snap_board(Session *s, const char *why, const char *skip) {
+    char hash[65], tmp[1024], fin[1024], name[64], path[1100], man[1024];
+    int board = skip == NULL;
+    snprintf(hash, sizeof hash, "skipped:%s", board ? "" : skip);
     /* hash the board in C. no interpreter boot inside the frame. */
     const char *paths[] = {"main", "hold"};
     if (board && tree_hash(s->root, paths, 2, hash) != 0) return -1;
@@ -235,7 +285,7 @@ static int snap_board(Session *s, const char *why, int board) {
     return session_state(s, "run");
 }
 
-int snap(Session *s, const char *why) { return snap_board(s, why, 1); }
+int snap(Session *s, const char *why) { return snap_board(s, why, NULL); }
 
 /* append a fault reason to the evidence line, after the tool's own words. */
 static int fault(Session *s, const char *fmt, ...) {
@@ -262,8 +312,11 @@ int frame(Session *s, Op op, Tool tool, void *arg, int k_due) {
         int g = s->gate(s);
         if (g > 0) return g;
     }
-    uint64_t gate_ns = nowns() - g0;
-    int rc = 0, over_quota = 0;
+    Board pre, post;
+    if (op == OP_TEST && board_read(s, &pre) != 0) return fault(s, "fault=board-unreadable");
+    uint64_t gate_ns = nowns() - g0;   /* gate + pre-step board read: the C thread's own work */
+    int rc = 0;
+    const char *skip = NULL;
 
     /* do always. the tool is a child with its own timeout; that time is not the frame. */
     uint64_t tool_t0 = nowns();
@@ -271,8 +324,28 @@ int frame(Session *s, Op op, Tool tool, void *arg, int k_due) {
     uint64_t tool_ms = (nowns() - tool_t0) / 1000000ull;
     uint64_t c0 = nowns() - gate_ns;   /* T_frame: the gate's time counts, the tool's does not */
 
+    /* TEST post-conditions: checked whatever the tool's rc, before the quota. */
+    if (op == OP_TEST) {
+        char moved[48] = "";
+        if (board_read(s, &post) != 0) snprintf(moved, sizeof moved, "unreadable");
+        else {
+            if (strcmp(pre.main_h, post.main_h)) strcat(moved, "main,");
+            if (strcmp(pre.rom_h, post.rom_h)) strcat(moved, "rom,");
+            if (!raw_same(&pre.tok, &post.tok) || !raw_same(&pre.env, &post.env)) strcat(moved, "token,");
+            size_t ml = strlen(moved);
+            if (ml) moved[ml - 1] = 0;
+        }
+        if (moved[0]) {
+            snprintf(s->ev, sizeof s->ev, "fault=test-postcondition moved=%s", moved);
+            if (strstr(moved, "token")) quarantine_token(s);
+            s->tainted = 1;
+            skip = "tainted";
+            rc = 1;
+        }
+    }
+
     /* hold quota: a successful tool that grew hold/ past budget is a failed step. */
-    if (rc == 0) {
+    if (rc == 0 && !skip) {
         uint64_t hb;
         if (hold_bytes(s, &hb) != 0) {
             snprintf(s->ev, sizeof s->ev, "fault=hold-unreadable");
@@ -281,14 +354,14 @@ int frame(Session *s, Op op, Tool tool, void *arg, int k_due) {
             snprintf(s->ev, sizeof s->ev, "fault=hold-quota grew=%llu quota=%llu",
                      (unsigned long long)(hb - s->hold_base), (unsigned long long)s->hold_quota);
             rc = 1;
-            over_quota = 1;
+            skip = "over-quota";
         }
     }
 
     size_t l = strlen(s->ev);
     snprintf(s->ev + l, sizeof s->ev - l, " tool_ms=%llu", (unsigned long long)tool_ms);
     s->n++;
-    if (snap_board(s, "step", !over_quota) != 0) {
+    if (snap_board(s, "step", skip) != 0) {
         /* no snapshot, no step. worst-case: n does not advance on a missed frame. */
         s->n--;
         return fault(s, "fault=snap n=%u", s->n);
