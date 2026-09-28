@@ -55,8 +55,23 @@ class TestISA(unittest.TestCase):
     def test_hook_unplugged_slot_is_none(self):
         s = Step(Op.READ, "fb", "rect", None, Ring.WORK)
         self.assertIsNone(hook(s, frozenset({"fs"}), radio=False))
-        for op in (Op.WRITE, Op.EXEC):
-            self.assertIsNone(hook(Step(op, "fb", "x", None, Ring.WORK), frozenset({"fs"}), radio=False))
+        self.assertIsNone(hook(Step(Op.WRITE, "fb", "x", None, Ring.WORK), frozenset({"fs"}), radio=False))
+
+    def test_hook_exec_slot_is_the_program(self):
+        # EXEC's slot is the program path, not a slot name. it needs fs, where tools live.
+        s = Step(Op.EXEC, "tools/hash.py", "hold/x", None, Ring.WORK)
+        self.assertIs(hook(s, frozenset({"fs"}), radio=False), s)
+        self.assertIsNone(hook(s, frozenset({"tty"}), radio=False))
+
+    def test_hook_judge_needs_judge_and_radio(self):
+        s = Step(Op.TEST, "fs", "tests/rom/t.py", Kind.JUDGE, Ring.HOLD)
+        self.assertIsNone(hook(s, frozenset({"fs"}), radio=True))
+        self.assertIs(hook(s, frozenset({"fs", "judge"}), radio=True), s)
+
+    def test_hook_visual_needs_fb(self):
+        s = Step(Op.TEST, "fs", "tests/rom/t.py", Kind.VISUAL, Ring.WORK)
+        self.assertIsNone(hook(s, frozenset({"fs"}), radio=False))
+        self.assertIs(hook(s, frozenset({"fs", "fb"}), radio=False), s)
 
     def test_hook_plugged_passes_same_term(self):
         s = Step(Op.READ, "fs", "main/x", None, Ring.WORK)
@@ -112,6 +127,71 @@ class TestISA(unittest.TestCase):
         pure = Step(Op.WAIT, "", "1", Kind.PURE, Ring.WORK)
         self.assertIsNot(none, pure)
         self.assertIs(none, Step(Op.WAIT, "", "1", None, Ring.WORK))
+
+    # --- the interned term is shared, so it is frozen and typed at birth ---
+
+    def test_interned_term_is_not_field_writable(self):
+        s = Step(Op.WAIT, "", "1", None, Ring.WORK)
+        for field, value in (("op", Op.WRITE), ("slot", "fb"), ("arg", "2"),
+                             ("kind", Kind.PURE), ("ring", Ring.HOLD)):
+            with self.subTest(field=field):
+                with self.assertRaises(dataclasses.FrozenInstanceError):
+                    setattr(s, field, value)
+        # the shared term is unchanged for every other holder of the key
+        again = Step(Op.WAIT, "", "1", None, Ring.WORK)
+        self.assertIs(again, s)
+        self.assertEqual((again.op, again.arg, again.ring), (Op.WAIT, "1", Ring.WORK))
+
+    def test_cannot_delete_a_field(self):
+        s = Step(Op.READ, "fs", "main/x", None, Ring.WORK)
+        with self.assertRaises(dataclasses.FrozenInstanceError):
+            del s.op
+
+    def test_raw_ints_are_not_terms(self):
+        # IntEnum compares equal to int. without a type check, ring=0 would dodge the ROM wall
+        # and Step(1, ...) would share an intern key with Step(Op.READ, ...).
+        with self.assertRaises(TypeError):
+            Step(Op.READ, "fs", "main/x", None, 0)
+        with self.assertRaises(TypeError):
+            Step(1, "fs", "main/x", None, Ring.WORK)
+        with self.assertRaises(TypeError):
+            Step(Op.TEST, "fs", "t", 1, Ring.WORK)
+        with self.assertRaises(TypeError):
+            Step(Op.READ, b"fs", "main/x", None, Ring.WORK)
+
+    def test_str_subclass_is_not_a_field(self):
+        # a subclass can carry a mutable __dict__; the term would no longer be frozen.
+        class Sticky(str):
+            pass
+        tag = Sticky("main/x")
+        tag.note = "mutable"
+        with self.assertRaises(TypeError):
+            Step(Op.READ, "fs", tag, None, Ring.WORK)
+
+    def test_op_is_closed(self):
+        # no sixth op by subclassing, by value, or by name.
+        with self.assertRaises(TypeError):
+            class Op6(Op):
+                BROWSE = 10
+        with self.assertRaises(ValueError):
+            Op(10)
+        with self.assertRaises(KeyError):
+            Op["BROWSE"]
+
+    def test_wrong_arity_is_not_a_term(self):
+        with self.assertRaises(TypeError):
+            Step(Op.READ, "fs", "main/x", None)
+        with self.assertRaises(TypeError):
+            Step(Op.READ, "fs", "main/x", None, Ring.WORK, "planner")
+
+    def test_intern_cache_holds_weak_references(self):
+        # the cache is an interner, not an owner: a term nobody holds leaves the table.
+        cache = type(Step)._c
+        key = (Op.READ, "fs", "main/weak-probe", None, Ring.WORK)
+        s = Step(*key)
+        self.assertIs(cache.get(key), s)
+        del s
+        self.assertIsNone(cache.get(key))
 
     def test_hook_never_emits_a_non_actuator(self):
         # deny is None; a pass-through actuator stays an actuator. no new ontology in the rewrite.

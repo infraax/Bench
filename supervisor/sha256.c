@@ -152,9 +152,17 @@ static int hash_one_file(Sha256 *h, const char *abs, const char *rel) {
 }
 
 int tree_hash(const char *root, const char *const *paths, int npaths, char hex[65]) {
+    const char *roots[16];
+    if (npaths < 0 || npaths > 16) return -1;
+    for (int i = 0; i < npaths; i++) roots[i] = root;
+    return tree_hash_roots(roots, paths, npaths, hex);
+}
+
+int tree_hash_roots(const char *const *roots, const char *const *paths, int npaths, char hex[65]) {
     Sha256 h;
     sha256_init(&h);
     for (int i = 0; i < npaths; i++) {
+        const char *root = roots[i];
         char abs[2048];
         struct stat st;
         if (join(abs, sizeof abs, root, paths[i])) return -1;

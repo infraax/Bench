@@ -9,8 +9,11 @@
  *     ban the one exec that starts the tool. banning tool-spawned sub-execs needs a
  *     sealed non-python tool (spec Law 2), which foundation does not ship.
  *   - default-deny seccomp on a full CPython is too fragile to be honest here; we KILL a
- *     named set of ambient-authority syscalls (network, ptrace, namespaces, mount, keys)
+ *     named set of ambient-authority syscalls (network, ptrace, namespaces, mount, keys, io_uring)
  *     instead. that removes the radio in the kernel, not just by not-compiling it.
+ *   - namespaces: every tool child gets a private mount namespace (plus a user namespace when
+ *     not root) showing only the world, /usr and a private /tmp; main/, ROM and sessions/ are
+ *     read-only in it. it cannot be set up -> the child does not run.
  * The real leash stays structural: the intern speaks only five opcodes into the C parser
  * and never holds this interpreter itself. */
 #ifndef SANDBOX_H
@@ -30,5 +33,9 @@ char **tool_env(void);
    with cwd already at the world root. returns 0 on success; on any failure the child
    must _exit() (fail closed) rather than run unsandboxed. */
 int sandbox_apply(Jail jail);
+
+/* the namespace step of sandbox_apply alone (sandbox.c): the child's view becomes the world
+   (cwd), /usr, /dev/null and a private /tmp. exposed for tests/perf/ns_cost.c. */
+int sandbox_world_only(void);
 
 #endif

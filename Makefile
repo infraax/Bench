@@ -1,13 +1,19 @@
 CC     ?= cc
 CFLAGS ?= -std=c11 -Wall -Wextra -Werror -O2
 PY     ?= python3
-BENCH_SRC = supervisor/main.c supervisor/frame.c supervisor/sha256.c supervisor/sandbox.c
-HDR       = supervisor/frame.h supervisor/woz_bus.h supervisor/sha256.h supervisor/sandbox.h
+BENCH_SRC = supervisor/main.c supervisor/frame.c supervisor/sha256.c supervisor/sandbox.c \
+            supervisor/arm.c supervisor/mailbox.c supervisor/refusal.c
+HDR       = supervisor/frame.h supervisor/woz_bus.h supervisor/sha256.h supervisor/sandbox.h \
+            supervisor/arm.h supervisor/mailbox.h supervisor/refusal.h
 ROMH      = supervisor/rom_hash.h
 ROM_FILES = $(wildcard tests/rom/*.py)
 E2E       = sessions/e2e
 
-all: supervisor/bench
+all: supervisor/bench supervisor/bench-helper
+
+# the mailbox helper. bench starts it from its own directory; nothing else should.
+supervisor/bench-helper: supervisor/helper.c supervisor/arm.c supervisor/arm.h
+	$(CC) $(CFLAGS) -o $@ supervisor/helper.c supervisor/arm.c
 
 # build tool: prints the tree hash of tests/rom
 supervisor/romhash: supervisor/romhash.c supervisor/sha256.c supervisor/sha256.h
@@ -19,12 +25,18 @@ $(ROMH): supervisor/romhash $(ROM_FILES)
 	@printf '#define ROM_HASH "%s"\n' "$$(./supervisor/romhash .)" >> $@
 	@echo "crowned ROM: $$(./supervisor/romhash .)"
 
-supervisor/bench: $(BENCH_SRC) $(HDR) $(ROMH)
+# bench fails closed without its helper, so building one builds both.
+supervisor/bench: $(BENCH_SRC) $(HDR) $(ROMH) | supervisor/bench-helper
 	$(CC) $(CFLAGS) -o $@ $(BENCH_SRC)
 
-# ring 0 (pure algebra), then the make-launched harness that drives the binary.
+# the bus, exhaustively: every lamp byte x bit, every plug byte x pull. C, no python.
+supervisor/bus_test: supervisor/bus_test.c supervisor/woz_bus.h
+	$(CC) $(CFLAGS) -o $@ supervisor/bus_test.c
+
+# bus, then ring 0 (pure algebra), then the make-launched harness that drives the binary.
 # pytest if present, stdlib unittest otherwise. no network either way.
-test: supervisor/bench
+test: supervisor/bench supervisor/bench-helper supervisor/bus_test
+	@./supervisor/bus_test
 	@if $(PY) -c "import pytest" 2>/dev/null; then \
 		$(PY) -m pytest tests/rom tests/harness -q; \
 	else \
@@ -32,12 +44,22 @@ test: supervisor/bench
 		$(PY) -m unittest discover -s tests/harness -p 'test_*.py' -q; \
 	fi
 
+# measurements (timing, machine-dependent): fork cost, N parallel worlds vs sequential.
+supervisor/ns_cost: tests/perf/ns_cost.c supervisor/sandbox.c supervisor/sandbox.h
+	$(CC) $(CFLAGS) -Isupervisor -o $@ tests/perf/ns_cost.c supervisor/sandbox.c
+
+perf: supervisor/bench supervisor/bench-helper supervisor/ns_cost
+	$(PY) tests/perf/perf_fork.py
+	@w=$$(mktemp -d) && mkdir -p $$w/hold $$w/main && (cd $$w && $(CURDIR)/supervisor/ns_cost 50); rc=$$?; rm -rf $$w; exit $$rc
+
 demo: supervisor/bench
 	./supervisor/bench demo
 
 # fixture intern end to end, in a scratch world under sessions/ (gitignored)
-e2e: supervisor/bench
-	rm -rf $(E2E) && mkdir -p $(E2E)/main $(E2E)/hold $(E2E)/tests
+e2e: supervisor/bench supervisor/bench-helper
+	-chmod -R u+rwX $(E2E) 2>/dev/null   # snaps are sealed read-only; unseal before removing
+	rm -rf $(E2E) && mkdir -p $(E2E)/main $(E2E)/hold $(E2E)/tests $(E2E)/sessions
+	: > $(E2E)/sessions/OWNER_TOKEN   # you, running make, arm the scratch world
 	cp -r supervisor tools isa $(E2E)/ && cp -r tests/rom $(E2E)/tests/rom
 	printf 'hello bench\n' > $(E2E)/main/hello.txt
 	printf 'READ  fs main/hello.txt\nWRITE fs hold/out.txt\nEXEC  tools/hash.py hold/out.txt\nTEST  PURE tests/rom/test_isa.py\nWAIT  1\n' > $(E2E)/touch.ops
@@ -46,7 +68,8 @@ e2e: supervisor/bench
 	BENCH_ROOT=$(E2E) ./supervisor/bench demo
 
 clean:
-	rm -f supervisor/bench supervisor/romhash $(ROMH)
-	find sessions -mindepth 1 ! -name .gitkeep -exec rm -rf {} +
+	rm -f supervisor/bench supervisor/bench-helper supervisor/romhash supervisor/bus_test supervisor/ns_cost $(ROMH)
+	-chmod -R u+rwX sessions 2>/dev/null   # snaps are sealed read-only; unseal before removing
+	find sessions -mindepth 1 ! -name .gitkeep ! -name OWNER_TOKEN -exec rm -rf {} +   # clean does not disarm
 
-.PHONY: all test demo e2e clean
+.PHONY: all test perf demo e2e clean
