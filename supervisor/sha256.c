@@ -3,6 +3,9 @@
  * verified against python hashlib and the tools/hash.py tree scheme. */
 #define _POSIX_C_SOURCE 200809L
 #include <dirent.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <unistd.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -131,24 +134,31 @@ static int walk(const char *abs, const char *rel, List *l) {
     return rc;
 }
 
+/* open without following a link and without blocking (a fifo swapped in after the walk's
+   lstat must not hang the frame clock), then require a regular file. size from fstat; exactly
+   that many bytes are hashed, so a file that grows mid-read cannot desync header and content. */
 static int hash_one_file(Sha256 *h, const char *abs, const char *rel) {
-    FILE *f = fopen(abs, "rb");
-    if (!f) return -1;
-    if (fseek(f, 0, SEEK_END) != 0) { fclose(f); return -1; }
-    long sz = ftell(f);
-    if (sz < 0 || fseek(f, 0, SEEK_SET) != 0) { fclose(f); return -1; }
-    char hdr[64];
+    int fd = open(abs, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC);
+    if (fd < 0) return -1;
+    struct stat st;
+    if (fstat(fd, &st) != 0 || !S_ISREG(st.st_mode)) { close(fd); return -1; }
+    char hdr[32];
     sha256_update(h, rel, strlen(rel));
     sha256_update(h, "\0", 1);
-    int hl = snprintf(hdr, sizeof hdr, "%ld", sz);
+    int hl = snprintf(hdr, sizeof hdr, "%lld", (long long)st.st_size);
     sha256_update(h, hdr, (size_t)hl);
     sha256_update(h, "\0", 1);
-    char buf[8192];
-    size_t r;
+    char buf[16384];
+    long long left = (long long)st.st_size;
     int rc = 0;
-    while ((r = fread(buf, 1, sizeof buf, f)) > 0) sha256_update(h, buf, r);
-    if (ferror(f)) rc = -1;
-    fclose(f);
+    while (left > 0) {
+        ssize_t r = read(fd, buf, left < (long long)sizeof buf ? (size_t)left : sizeof buf);
+        if (r < 0 && errno == EINTR) continue;
+        if (r <= 0) { rc = -1; break; }          /* shrank under us: the hash would lie, fail */
+        sha256_update(h, buf, (size_t)r);
+        left -= r;
+    }
+    close(fd);
     return rc;
 }
 
