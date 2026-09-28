@@ -90,12 +90,12 @@ Not "Bench would have caught it" — the *class* of failure has no path in Bench
 
 ## 4. Gaps other tools close that Bench does not
 
-| Gap | Who closes it | Bench today | Where it goes |
+| Gap | Who closes it | Bench before | Status |
 |---|---|---|---|
-| **io_uring not denied** | codex `linux-sandbox` denies the io_uring syscalls in every network-restricted mode | seccomp list does not name them; io_uring can do I/O the per-syscall filter never sees | Task 5 (`DEVELOPMENT_PLAN.md` sprint 1) |
-| **Tool children see the whole filesystem** | codex and sandbox-runtime run children in their own namespaces (bubblewrap) | landlock limits *writes* for `EXEC`; reads are open; `TEST` has no landlock; same uid, so the snapshot seal is advisory against tools | Task 6 (sprint 2) |
-| **Refusals are not actionable** | sandbox-runtime attaches a model-facing reason to a denial; SWE-agent shows the lint error and the original code back | faults name *what* broke, not a rule id or *what to do instead* | Task 3 (sprint 1) |
-| **No parallelism** | qwen-code: a git worktree per parallel session; gemini-cli: shadow repo | one world, one lock, one frame clock | Task 4 (sprint 2) |
+| **io_uring not denied** | codex `linux-sandbox` denies the io_uring syscalls in every network-restricted mode | seccomp list does not name them; io_uring can do I/O the per-syscall filter never sees | **closed** `a8bebc9` (killed; x32 hole closed too, `1096ebc`) |
+| **Tool children see the whole filesystem** | codex and sandbox-runtime run children in their own namespaces (bubblewrap) | landlock limits *writes* for `EXEC`; reads are open; `TEST` has no landlock; same uid, so the snapshot seal is advisory against tools | **closed** `80cf6bf` (mount + user namespaces) |
+| **Refusals are not actionable** | sandbox-runtime attaches a model-facing reason to a denial; SWE-agent shows the lint error and the original code back | faults name *what* broke, not a rule id or *what to do instead* | **closed** `5504dfc` (`rule=` + fix) |
+| **No parallelism** | qwen-code: a git worktree per parallel session; gemini-cli: shadow repo | one world, one lock, one frame clock | **closed** `6f94f4f` (`bench fork`, 3.7× at N=4) |
 | **No policy list / ASK tier** | omnigent: ALLOW / DENY / ASK + reason, fail closed; inspect_ai: approvers and limits as objects | gate is a fixed sequence of checks in `frame()` | Tier A, sprint 3 |
 | **No context management** | deepagents offload, pi-mono truncation bounds (2000 lines / 50 KB), compaction in most loops | out of scope (no loop), but the 4 KiB tty cap is a blunt instrument | Tier A, sprint 4 |
 | **No replay** | inspect_ai logs are re-scorable; OpenEnv `reset/step/state` | `OPS` + snaps written, never re-run | `EVOLUTION.md` next #1 |

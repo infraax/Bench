@@ -1,5 +1,44 @@
 # NOTES
 
+## Session 5 — handoff tasks 1–6 (comparison, plan, refusals, fork, io_uring, namespaces)
+
+### Start
+
+- Branch `claude/handoff-start-004f8n` at `ff6d95f`. `make test`: bus ok, 50 ROM + 117 harness, green.
+- The chat version of the comparison was not in the tree; `COMPARISON.md` was rebuilt from `research/`.
+
+### Shipped
+
+| Task | Commit | Result |
+|---|---|---|
+| 1 `COMPARISON.md` | `050abfc` | layers, size table, where Bench leads, incidents avoided, gaps, ranked ideas |
+| 2 `DEVELOPMENT_PLAN.md` | `e9f1187` | five sprints, each with exit criteria and one measured number |
+| 3 refusals | `5504dfc` | `rule=<id> fix: …` on every refusal; C table `refusal.c` = ROM `test_refusals.py`; `bench rules` |
+| 4 `bench fork` | `6f94f4f` | verified snap → new unarmed world, copies only; `make perf`: fork 3.6 ms, N=4 parallel 3.7× |
+| 5 io_uring | `a8bebc9` | reproduced (a tool got a ring fd), then killed; SIGSYS → `rule=sandbox` |
+| — x32 | `1096ebc` | found while in the filter: x32 nrs fell through to ALLOW; now killed |
+| 6 namespaces | `80cf6bf` | tool sees only the world; main/ROM/sessions read-only to every tool; +0.8 ms per child |
+
+### End
+
+- `make test`: bus ok, 55 ROM, 139 harness. `make e2e` green. `make perf` green.
+- Namespaces checked by hand as uid 65534 (the user-namespace path); the harness runs as root.
+
+### Left open
+
+- **Post-conditions are now unreachable by test.** The namespace refuses every move a `TEST` could
+  make, so the frame's post-condition code (layer 2) is no longer exercised by the harness. Kept as
+  the backstop; a test for it would need a way past layer 1.
+- **No PID namespace.** A tool can signal same-uid processes, bench included. Needs a double fork
+  in `child_run` (the exec'd process must be the new namespace's child).
+- **`execvpe` searches bench's PATH, not the tool env's** (glibc uses the caller's `environ`). The
+  README's "fixed PATH" holds for the child's env, not for finding `python3`. Resolve the interpreter
+  once, at build or start, and exec it by absolute path.
+- **`rc=125` (jail could not be built) has no rule id.** A tool exiting 125 looks the same. Give
+  setup failure its own return from `child_run`, like `-5` for SIGSYS.
+- **`tools/peek.py` in a forked world**: it reads `supervisor/woz_bus.h` from the world, which a fork
+  does not copy (binaries are used by path). Copy the header, or have peek take the bus from `bench`.
+
 ## Session 4 — hardening + adversarial pass
 
 ### Start
