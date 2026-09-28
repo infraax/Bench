@@ -2176,6 +2176,24 @@ class TestCage(unittest.TestCase):
     def test_a_daemonized_child_dies_with_its_frame(self):
         self.assert_no_late_write("pass")
 
+    def test_a_worker_dies_with_a_killed_supervisor(self):
+        # bench killed mid-EXEC (kill -9, OOM): the worker must not go on writing hold/ with no
+        # knife and no snap (found by tests/deep/powercut_sweep.py). PR_SET_PDEATHSIG.
+        w = addWorld(self)
+        prog = w.tool("slow.py", "import time\ntime.sleep(1.5)\nopen('hold/late.txt', 'w').write('x')\n")
+        p = subprocess.Popen([str(BENCH), "run", w.script(f"EXEC {prog}\n", name="slow.ops")], cwd=IMAGE,
+                             env=w.env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self.addCleanup(lambda: p.poll() is None and p.kill())
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline and "EXEC" not in ((w.session() / "log").read_text()
+                                                              if (w.root / "sessions" / "CURRENT").exists() else ""):
+            time.sleep(0.02)
+        time.sleep(0.2)
+        p.kill()
+        p.wait(timeout=10)
+        time.sleep(2.0)
+        self.assertFalse((w.root / "hold" / "late.txt").exists(), "the worker outlived its supervisor")
+
     def test_a_setsid_child_dies_with_its_frame(self):
         # a new session escapes the process group; the subreaper still catches it
         self.assert_no_late_write("os.setsid()")

@@ -42,6 +42,8 @@ def main():
                                    "--json", out / "fault_sweep.json"]),
         ("fault injection sweep ENOSPC", [sys.executable, DEEP / "fault_sweep.py", "--max", "4" if q else "20",
                                           "--errno", "28", "--json", out / "fault_sweep_enospc.json"]),
+        ("power-cut sweep (SIGKILL)", [sys.executable, DEEP / "powercut_sweep.py", "--max", "3" if q else "12",
+                                       "--json", out / "powercut_sweep.json"]),
         ("mutation: python ISA vs ROM", [sys.executable, DEEP / "mutate.py", "--json", out / "mutate_py.json",
                                          "--min-score", "0.9"]),
     ]

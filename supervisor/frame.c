@@ -20,6 +20,7 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <sys/prctl.h>
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
@@ -103,7 +104,7 @@ int child_run(const char *root, char *const argv[], Jail jail, char *out, size_t
        exec). a successful exec closes it unwritten. so "the worker never started" is never
        mistaken for a tool that chose to exit 125/126/127. */
     if (pipe2(sp, O_CLOEXEC) != 0) { close(p[0]); close(p[1]); return -1; }
-    pid_t pid = fork();
+    pid_t sup = getpid(), pid = fork();
     if (pid < 0) { close(p[0]); close(p[1]); close(sp[0]); close(sp[1]); return -1; }
     if (pid == 0) {
         setpgid(0, 0);                      /* its own group: the knife reaches the whole group */
@@ -120,6 +121,11 @@ int child_run(const char *root, char *const argv[], Jail jail, char *out, size_t
         /* the search for argv[0] uses the worker's fixed PATH, not bench's: glibc execvpe
            searches the caller's environ, so swap it in before a plain execvp. */
         environ = env;
+        /* no worker outlives its supervisor either: if bench is killed (-9, OOM) mid-step, the
+           worker dies with it instead of writing hold/ with no knife and no snap (found by
+           tests/deep/powercut_sweep.py). set last, because namespace and credential changes
+           clear it; then make sure the supervisor did not die before it was set. */
+        if (prctl(PR_SET_PDEATHSIG, SIGKILL) != 0 || getppid() != sup) { if (write(sp[1], "d", 1)) {} _exit(125); }
         execvp(argv[0], argv);
         if (write(sp[1], "x", 1)) {}
         _exit(127);

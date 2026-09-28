@@ -82,8 +82,9 @@ test-sanitize: $(ROMH) supervisor/bus_test
 		rm -f supervisor/bench supervisor/bench-helper; $(MAKE) --no-print-directory all >/dev/null; exit $$rc
 
 # the deep kit (docs/TESTING_KIT.md): differential parser fuzzing (C vs site mirror vs a real
-# run), tree-hash differential + metamorphic fuzzing, a syscall fault-injection sweep with an
-# independent evidence audit, and mutation testing of the ISA against ROM. report under ledger/.
+# run), tree-hash differential + metamorphic fuzzing, a syscall fault-injection sweep and a
+# SIGKILL power-cut sweep with an independent evidence audit, and mutation testing of the ISA
+# against ROM. report under ledger/.
 # not in CI and not in `make test`: it is the slow, adversarial pass. DEEP=--quick for ~1 min;
 # DEEP=--c adds C mutation testing of the parser (minutes).
 test-deep: supervisor/bench supervisor/bench-helper supervisor/romhash
