@@ -31,6 +31,7 @@ const Rule RULES[] = {
     {"fs-path",       "name an existing regular file; no component may be a symlink"},
     {"fs-cap",        "keep a READ or WRITE within the fs cap (4096 bytes); split the file"},
     {"tty-cap",       "print at most 4096 bytes; bound the tool's output"},
+    {"sandbox",       "the tool made a forbidden syscall (network, ptrace, namespaces, mount, keys, io_uring); drop it"},
     {"out-ceil",      "the tool printed past 1 MiB and was killed; bound its output"},
     {"t-tool",        "finish within T_tool (5000 ms); split the work across steps"},
     {"hold-bytes",    "hold/ grew past its byte quota this session; write less or ask the owner for --hold-quota"},

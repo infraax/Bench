@@ -130,6 +130,8 @@ int child_run(const char *root, char *const argv[], Jail jail, char *out, size_t
     close(p[0]);
     if (out) out[used] = 0;
     if (nbytes) *nbytes = total;
+    /* SIGSYS is the seccomp filter's KILL: the tool reached for a door it does not have. */
+    if (WIFSIGNALED(st) && WTERMSIG(st) == SIGSYS) return -5;
     rc = WIFEXITED(st) ? WEXITSTATUS(st) : -1;
     return rc;
 }

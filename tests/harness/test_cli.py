@@ -1641,6 +1641,31 @@ class TestCage(unittest.TestCase):
                            "libc.ptrace(0, 0, 0, 0)\n")
         r = w.bench("run", w.script("EXEC tools/trace.py\n"))
         self.assertNotEqual(r.returncode, 0)
+        self.assertIn("rule=sandbox", r.stdout)
+
+    URING = ("import ctypes, os, sys\n"
+             "print('before', flush=True)\n"
+             "libc = ctypes.CDLL(None, use_errno=True)\n"
+             "nr = {'setup': 425, 'enter': 426, 'register': 427}[sys.argv[1]]\n"
+             "r = libc.syscall(nr, 0, 0, 0, 0, 0, 0)\n"
+             "print('after', r, ctypes.get_errno(), flush=True)\n")
+
+    def test_seccomp_kills_io_uring(self):
+        # a ring does I/O the per-syscall filter never sees. KILL (SIGSYS), not EPERM: the test
+        # then proves the filter, whether or not this kernel has io_uring switched on.
+        # TEST children get the same filter (sandbox_apply runs seccomp for both jails).
+        for call in ("setup", "enter", "register"):
+            with self.subTest(call=call):
+                w = addWorld(self)
+                w.tool("uring.py", self.URING)
+                line = f"EXEC tools/uring.py {call}\n"
+                r = w.bench("run", w.script(line))
+                self.assertEqual(r.returncode, 1, r.stdout)
+                self.assertIn("sandbox SIGSYS rule=sandbox", r.stdout)
+                self.assertIn("  rule=sandbox fix: ", r.stdout)
+                out = (w.session() / "out-1").read_text()
+                self.assertIn("before", out)
+                self.assertNotIn("after", out)
 
     def test_landlock_denies_write_to_rom(self):
         w = addWorld(self)

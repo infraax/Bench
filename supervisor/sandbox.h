@@ -9,7 +9,7 @@
  *     ban the one exec that starts the tool. banning tool-spawned sub-execs needs a
  *     sealed non-python tool (spec Law 2), which foundation does not ship.
  *   - default-deny seccomp on a full CPython is too fragile to be honest here; we KILL a
- *     named set of ambient-authority syscalls (network, ptrace, namespaces, mount, keys)
+ *     named set of ambient-authority syscalls (network, ptrace, namespaces, mount, keys, io_uring)
  *     instead. that removes the radio in the kernel, not just by not-compiling it.
  * The real leash stays structural: the intern speaks only five opcodes into the C parser
  * and never holds this interpreter itself. */

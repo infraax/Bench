@@ -58,13 +58,19 @@ static int seccomp_deny_ambient(void) {
         __NR_sendto, __NR_recvfrom, __NR_sendmsg, __NR_recvmsg, __NR_socketpair,
         __NR_setsockopt, __NR_getsockopt,
     };
-    /* the debugger, namespaces, mount, the key ring: never innocent, never touched at
+    /* the debugger, namespaces, mount, the key ring, io_uring: never innocent, never touched at
        startup. KILL — a real attempt dies with SIGSYS, which the supervisor sees as a fault. */
     static const int deny_kill[] = {
         __NR_ptrace, __NR_process_vm_readv, __NR_process_vm_writev,
         __NR_mount, __NR_umount2, __NR_pivot_root, __NR_chroot,
         __NR_unshare, __NR_setns,
         __NR_add_key, __NR_request_key, __NR_keyctl,
+        /* io_uring: a ring does reads, writes, connects and opens the kernel never shows this
+           filter one syscall at a time — a door past every rule above. CPython never touches it
+           at startup. (codex's linux sandbox denies the same three.) */
+#ifdef __NR_io_uring_setup
+        __NR_io_uring_setup, __NR_io_uring_enter, __NR_io_uring_register,
+#endif
     };
     size_t nk = sizeof deny_kill / sizeof deny_kill[0];
     size_t ne = sizeof deny_errno / sizeof deny_errno[0];

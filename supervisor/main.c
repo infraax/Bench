@@ -357,6 +357,7 @@ static int t_exec(Session *s, void *arg) {
     if (rc == -2) return ev(s, 1, "knife op=exec prog=%s timeout>%ums rule=t-tool", in->slot, s->t_tool_ms);
     if (rc == -3) return ev(s, 1, "halt op=exec prog=%s child killed rule=kill", in->slot);
     if (rc == -4) return ev(s, 1, "leash op=exec prog=%s out>%u killed rule=out-ceil", in->slot, OUT_CEIL_BYTES);
+    if (rc == -5) return ev(s, 1, "deny op=exec prog=%s sandbox SIGSYS rule=sandbox", in->slot);
     if (nb > s->bus.cap[SLOT_TTY]) return ev(s, 1, "leash op=exec out=%llu>%u rule=tty-cap", (unsigned long long)nb, s->bus.cap[SLOT_TTY]);
     return ev(s, rc != 0, "op=exec kind=none slot=%s rc=%d out=%llu dirty=0", in->slot, rc, (unsigned long long)nb);
 }
@@ -384,6 +385,7 @@ static int t_test(Session *s, void *arg) {
     if (rc == -2) return ev(s, 1, "knife op=test path=%s timeout>%ums rule=t-tool", in->path, s->t_tool_ms);
     if (rc == -3) return ev(s, 1, "halt op=test path=%s child killed rule=kill", in->path);
     if (rc == -4) return ev(s, 1, "leash op=test path=%s out>%u killed rule=out-ceil", in->path, OUT_CEIL_BYTES);
+    if (rc == -5) return ev(s, 1, "deny op=test path=%s sandbox SIGSYS rule=sandbox", in->path);
     return ev(s, rc != 0, "op=test kind=%s slot=fs path=%s rc=%d result=\"%s\" dirty=0",
               !strcmp(in->slot, "PURE") ? "pure" : "scalar", in->path, rc, out);
 }

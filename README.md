@@ -199,8 +199,9 @@ unix socket it creates at `sessions/<id>/helper.sock`. This machine only; no int
 `is_ring0` is a source check — it stops an accidental network or spawn import in a ROM file,
 nothing more. Tool children are limited by the C supervisor:
 
-- **seccomp**, every tool child: network syscalls return `EPERM`; ptrace, mount, namespace and
-  key-ring syscalls terminate the child.
+- **seccomp**, every tool child: network syscalls return `EPERM`; ptrace, mount, namespace,
+  key-ring and io_uring syscalls terminate the child (SIGSYS → `rule=sandbox` in the evidence).
+  io_uring is killed because a ring does I/O this per-syscall filter never sees.
 - **landlock**, `EXEC` children only: writes allowed under `hold/`, `proposed/`, `tests/proposed/`.
   `TEST` children run without landlock (the test runner needs `/tmp`); the frame's post-conditions
   cover what they must not change.

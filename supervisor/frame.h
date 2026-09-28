@@ -80,7 +80,8 @@ int  session_state(const Session *s, const char *status);
 #endif
 
 /* tools are children with a knife. returns exit code, -2 on timeout, -3 on halt (g_halt: the
-   child is killed now, not after T_tool), -4 on output past out_max (killed), -1 on spawn failure.
+   child is killed now, not after T_tool), -4 on output past out_max (killed), -5 killed by the seccomp filter (SIGSYS),
+   -1 on spawn failure or another signal.
    out_max = 0 means no ceiling.
    stdout is captured into out (truncated) and counted in *nbytes; copied to log_fd if >= 0.
    err_fd >= 0 receives the child's stderr, otherwise it is inherited. */
