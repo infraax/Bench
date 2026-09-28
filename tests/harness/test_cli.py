@@ -1667,6 +1667,18 @@ class TestCage(unittest.TestCase):
                 self.assertIn("before", out)
                 self.assertNotIn("after", out)
 
+    def test_seccomp_kills_x32_syscall_numbers(self):
+        # an x32 nr (bit 30) under AUDIT_ARCH_X86_64 matches no compare; without the range check
+        # it would fall through to ALLOW on a kernel with x32 enabled. here: socket(2) as x32.
+        w = addWorld(self)
+        w.tool("x32.py", "import ctypes\nprint('before', flush=True)\n"
+                         "libc = ctypes.CDLL(None, use_errno=True)\n"
+                         "r = libc.syscall(0x40000000 | 41, 2, 1, 0)\nprint('after', r, flush=True)\n")
+        r = w.bench("run", w.script("EXEC tools/x32.py\n"))
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("rule=sandbox", r.stdout)
+        self.assertNotIn("after", (w.session() / "out-1").read_text())
+
     def test_landlock_denies_write_to_rom(self):
         w = addWorld(self)
         w.tool("pwn.py", "open('tests/rom/pwn.py', 'w').write('x')\n")

@@ -76,7 +76,7 @@ static int seccomp_deny_ambient(void) {
     size_t ne = sizeof deny_errno / sizeof deny_errno[0];
 
     const uint32_t ERRNO = SECCOMP_RET_ERRNO | (EPERM & SECCOMP_RET_DATA);
-    size_t len = nk + ne + 8;   /* ld-arch, jeq, kill, ld-nr, compares, allow, kill, errno */
+    size_t len = nk + ne + 9;   /* ld-arch, jeq, kill, ld-nr, x32, compares, allow, kill, errno */
     struct sock_filter *f = calloc(len, sizeof *f);
     if (!f) return -1;
     size_t i = 0;
@@ -85,7 +85,11 @@ static int seccomp_deny_ambient(void) {
     f[i++] = (struct sock_filter)BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_KILL_PROCESS);
     f[i++] = (struct sock_filter)BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(struct seccomp_data, nr));
     /* tail after all compares: ALLOW at A, KILL at A+1, ERRNO at A+2. */
-    size_t a = i + nk + ne;
+    size_t a = i + 1 + nk + ne;
+    /* x32: same AUDIT_ARCH_X86_64, but nr carries bit 30, so it would match none of the compares
+       below and fall through to ALLOW. no tool here speaks x32: any such nr dies. */
+    f[i] = (struct sock_filter)BPF_JUMP(BPF_JMP | BPF_JGE | BPF_K, 0x40000000u, (uint8_t)((a + 1) - (i + 1)), 0);
+    i++;
     for (size_t j = 0; j < nk; j++) {
         uint8_t to = (uint8_t)((a + 1) - (i + 1));   /* -> KILL */
         f[i] = (struct sock_filter)BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, (uint32_t)deny_kill[j], to, 0);
