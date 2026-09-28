@@ -1,0 +1,29 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+name: test
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: machine card
+        run: make env
+      - name: make test (into the ledger)
+        run: make ledger-test
+      - name: ledger on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ledger
+          path: |
+            ledger/
+            !ledger/README.md
+            !ledger/.gitkeep
+          retention-days: 14
