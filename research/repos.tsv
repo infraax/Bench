@@ -1,0 +1,23 @@
+name	url	sha	commit_date	license
+NousResearch_hermes-agent	https://github.com/NousResearch/hermes-agent.git	298df0820d6a72250640600efe454d3debfdf2b4	2026-09-28	MIT License
+OpenHands	https://github.com/All-Hands-AI/OpenHands.git	47a10808d78561546a02555d0d2c7fa96fa96300	2026-09-25	MIT License
+PrimeIntellect-ai_prime-agent	https://github.com/PrimeIntellect-ai/prime-agent.git	2d24ad4e6b2d1ee8e6919af6f108e980a14d550e	2026-09-27	MIT License
+PrimeIntellect-ai_verifiers	https://github.com/PrimeIntellect-ai/verifiers.git	e66ec52966327e79011f4c3bb34a0f9817ce32b8	2026-09-27	MIT License
+QwenLM_qwen-code	https://github.com/QwenLM/qwen-code.git	48107945ea69b5e191e10e4213666f6618978b74	2026-09-28	Apache License
+SWE-agent	https://github.com/SWE-agent/SWE-agent.git	3ea751c087f32b16e039a2233dd6eefecef325d5	2026-07-16	MIT License
+aider	https://github.com/Aider-AI/aider.git	5dc9490bb35f9729ef2c95d00a19ccd30c26339c	2026-05-22	Apache License
+badlogic_pi-mono	https://github.com/badlogic/pi-mono.git	6f7551516b84278eb9da1c340c8e7bc66be1a6ba	2026-09-28	MIT License
+codex	https://github.com/openai/codex.git	67a709665ac7b50311b93e32612c9a8281684787	2026-09-27	Apache License
+gemini-cli	https://github.com/google-gemini/gemini-cli.git	2fe7c2d3f065dc40ad573d50b2091116f8a4aa18	2026-09-25	Apache License
+goose	https://github.com/block/goose.git	04ed836c8cde23e540cc77d256992e00be99298b	2026-09-25	Apache License
+huggingface_smolagents	https://github.com/huggingface/smolagents.git	227ef5e49ddd82339295939072f0223249aa8d38	2026-09-23	Apache License
+inspect_ai	https://github.com/UKGovernmentBEIS/inspect_ai.git	c2b63a0b0560f9c3b5b5230365e0a8fe08cd3df0	2026-09-26	MIT License
+langchain-ai_deepagents	https://github.com/langchain-ai/deepagents.git	e70cf09267d93ce54f381d77fb577a76adac6300	2026-09-28	MIT License
+meta-pytorch_OpenEnv	https://github.com/meta-pytorch/OpenEnv.git	9e0fd9baf39a7d3b0d92d3dccfcbf2900105d34f	2026-09-25	BSD
+metaevo-ai_harness-zero	https://github.com/metaevo-ai/harness-zero.git	aa63a7751997969c2880896f9df3098c7f650fe2	2026-09-22	Apache License
+mini-swe-agent	https://github.com/SWE-agent/mini-swe-agent.git	04d809ceab9df28f9adaed044884180159172930	2026-09-03	MIT License
+omnigent-ai_omnigent	https://github.com/omnigent-ai/omnigent.git	1ea626f5c0b0a67ed43476092d71b49a4c880a3c	2026-09-28	Apache License
+sandbox-runtime	https://github.com/anthropic-experimental/sandbox-runtime.git	ddbeb74711c4097014ef3056791efa83f553116c	2026-09-21	Apache License
+shareAI-lab_learn-claude-code	https://github.com/shareAI-lab/learn-claude-code.git	0dcafa2ae053a1ddd6a72f265431104b08a5aa13	2026-08-27	MIT License
+sst_opencode	https://github.com/sst/opencode.git	03e67171ab2dc1e7f16e8cebfbc7f778f61b89f0	2026-09-28	MIT License
+zed-industries_agent-client-protocol	https://github.com/zed-industries/agent-client-protocol.git	b8e86aa02d32f1a0fc21cf28677cd32ba0259d8b	2026-09-27	Apache License

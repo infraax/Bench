@@ -8,3 +8,4 @@ supervisor/romhash
 supervisor/rom_hash.h
 supervisor/bus_test
 supervisor/bench-helper
+research/clones/

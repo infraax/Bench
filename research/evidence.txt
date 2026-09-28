@@ -1,0 +1,130 @@
+# research/evidence.sh run 2026-09-28T06:39:37Z over the pinned clones
+
+=== mini-swe-agent: whole loop in one file, step + cost limits
+190 mini-swe-agent/src/minisweagent/agents/default.py
+15:from minisweagent.exceptions import FormatError, InterruptAgentFlow, LimitsExceeded, TimeExceeded
+26:    step_limit: int = 0
+28:    cost_limit: float = 3.0
+132:        if 0 < self.config.step_limit <= self.n_calls or 0 < self.config.cost_limit <= self.cost:
+133:            raise LimitsExceeded(
+136:                    "content": "LimitsExceeded",
+
+=== SWE-agent: edit rejected when it adds lint errors, original shown back
+18:from flake8_utils import flake8, format_flake8_output  # type: ignore
+27:_LINT_ERROR_TEMPLATE = """Your proposed edit has introduced new syntax error(s). Please read this error message carefully and then retry editing the file.
+37:This is the original code before your edit
+39:{window_original}
+95:    pre_edit_lint = flake8(wf.path)
+101:    post_edit_lint = flake8(wf.path)
+
+=== Pi: small tool set, output truncation bounds
+bash.ts
+edit-diff.ts
+edit.ts
+file-mutation-queue.ts
+find.ts
+grep.ts
+index.ts
+ls.ts
+output-accumulator.ts
+path-utils.ts
+powershell.ts
+read.ts
+render-utils.ts
+renderers
+tool-definition-wrapper.ts
+truncate.ts
+write.ts
+11:export const DEFAULT_MAX_LINES = 2000;
+12:export const DEFAULT_MAX_BYTES = 50 * 1024; // 50KB
+79:	const maxLines = options.maxLines ?? DEFAULT_MAX_LINES;
+80:	const maxBytes = options.maxBytes ?? DEFAULT_MAX_BYTES;
+169:	const maxLines = options.maxLines ?? DEFAULT_MAX_LINES;
+170:	const maxBytes = options.maxBytes ?? DEFAULT_MAX_BYTES;
+
+=== deepagents: large tool results moved to files, pointer left in context
+11:- Any other tool result: full offload to `/large_tool_results/{tool_call_id}`
+79:    `read_file` results don't need a fresh `/large_tool_results/{tcid}` write -- the
+109:    large_tool_results_prefix: str,
+115:    return _offload_tool_message_content(msg, _extract_text_from_message(msg), backend, large_tool_results_prefix)
+1727:        tool_token_limit_before_evict: int | None = 20000,
+
+=== Prime Agent: evidence-backed, reversible harness refinement
+---
+name: refine
+description: Trigger continual harness refinement from the Python REPL. Use when you notice a repeated failure, reusable tactic, delegation role, or behavior policy that should be persisted as a harness entry. Returns immediately; refinement runs when the current turn ends.
+---
+
+# Refine
+
+Refinement analyzes the conversation trajectory and applies small, evidence-backed
+updates to the continual harness (prompts, memories, skills, subagent specs).
+The implementation lives in the host (the same one behind the user's `/refine`
+command); this skill is the kernel-side interface to it. Call it directly from
+the Python REPL:
+
+```python
+await refine.status()
+await refine.run()
+await refine.run("create a memory about always checking git status before committing")
+await refine.run("promote the error-handling pattern to a global skill", global_=True)
+```
+
+
+=== Hermes: skill curator — archive, never delete
+"""Curator — background skill maintenance orchestrator.
+
+Inactivity-triggered (no cron daemon): when the agent is idle and the last run is older than ``interval_hours``,
+``maybe_run_curator()`` auto-transitions lifecycle states from activity timestamps, optionally forks an AIAgent that
+may pin/archive/consolidate/patch skills via skill_manage, and persists scheduler state in ``.curator_state``.
+Invariants: only curator-managed skills are touched; never delete, only archive (recoverable); pinned skills bypass
+all auto-transitions; the fork uses the auxiliary client and never touches the main session's prompt cache."""
+
+
+=== Omnigent: policy = ALLOW / DENY / ASK + reason, fail closed
+25:        "result": "ALLOW" | "DENY" | "ASK",
+131:           in a fail-closed DENY.
+
+=== Inspect AI: limits and approval as first-class objects
+292:def token_limit_usage() -> int | None:
+561:def token_limit_fields(value: int | str | TokenLimit | None) -> TokenLimitFields:
+576:def token_limit(
+672:def cost_limit(limit: float | None) -> _CostLimit:
+715:def message_limit(limit: int | None) -> _MessageLimit:
+842:def time_limit(limit: float | None) -> _TimeLimit:
+865:def working_limit(limit: float | None) -> _WorkingLimit:
+942:def working_limit_exceeded() -> LimitExceededError | None:
+__init__.py
+_apply.py
+_approval.py
+_approver.py
+_auto.py
+_call.py
+_human
+_policy.py
+_registry.py
+
+=== OpenEnv: reset / step / state environment interface
+174:    def reset(
+206:    def step(
+219:    def state(self) -> HarborState:
+
+=== gemini-cli: checkpoints in an isolated shadow git repo
+53: * Common configuration for the shadow Git repository used for checkpointing.
+55: * We enable all "unsafe" options because the shadow repository is an internal,
+141:    // preferences for the shadow repository, so we create a dedicated gitconfig.
+145:    const shadowRepoEnv = this.getShadowRepoEnv(repoDir);
+
+=== Codex: agent-metadata paths kept read-only inside writable roots
+860:        append_default_read_only_project_root_subpath_if_no_explicit_rule(&mut entries, ".git");
+861:        append_default_read_only_project_root_subpath_if_no_explicit_rule(&mut entries, ".agents");
+862:        append_default_read_only_project_root_subpath_if_no_explicit_rule(&mut entries, ".codex");
+
+=== sandbox-runtime: model-facing reason attached to a denial
+733:      'Optional model-facing reason keyed by the exact deniedDomains entry it explains (e.g., {"github.com:22": "SSH pushes to GitHub are blocked; use an https remote"}). ' +
+
+=== qwen-code: git worktrees for parallel sessions
+QwenLM_qwen-code/packages/cli/src/startup/worktreeStartup.ts
+
+=== aider: commit after every edit
+308:        auto_commits=True,

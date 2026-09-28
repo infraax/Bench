@@ -1,0 +1,25 @@
+# research/loc.py run 2026-09-28T06:38:39Z over the 22 pinned clones in research/repos.tsv
+repo                                             code       test  files  langs
+Bench                                           3,079      2,175     19  c,py
+mini-swe-agent                                  5,123      9,907     59  py
+SWE-agent                                      12,691      2,490     68  py,js
+huggingface_smolagents                         12,774     12,635     18  py
+sandbox-runtime                                21,932     43,898     41  ts,js
+aider                                          25,853     12,311    105  py
+shareAI-lab_learn-claude-code                  29,316      6,064     92  py,ts
+PrimeIntellect-ai_verifiers                    34,971      3,973    245  py,ts
+metaevo-ai_harness-zero                        43,768    328,864    287  py
+zed-industries_agent-client-protocol           46,586          0     34  rs,py
+OpenHands                                     144,039    193,102   1243  ts,py
+meta-pytorch_OpenEnv                          144,380     61,976    674  py
+badlogic_pi-mono                              185,124    179,560    772  ts,js
+PrimeIntellect-ai_prime-agent                 207,851    164,373    481  ts,py
+inspect_ai                                    251,080    321,782    924  py
+gemini-cli                                    291,961    400,398   1217  ts,js
+langchain-ai_deepagents                       296,363    355,934    486  py,js
+goose                                         362,939     55,413   1013  rs,ts
+sst_opencode                                  506,762    176,966   2562  ts,js
+omnigent-ai_omnigent                          729,562  1,160,969   1746  py,ts
+codex                                       1,056,601    960,951   3809  rs,py
+NousResearch_hermes-agent                   1,484,105  1,557,043   4622  py,ts
+QwenLM_qwen-code                            1,816,840  2,456,200   3725  ts,rs
