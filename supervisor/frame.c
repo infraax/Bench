@@ -65,6 +65,8 @@ int write_atomic(const char *path, const char *text) {
     return rename(tmp, path);
 }
 
+extern char **environ;
+
 int child_run(const char *root, char *const argv[], Jail jail, char *out, size_t outsz,
               uint64_t *nbytes, uint32_t timeout_ms, uint64_t out_max, int log_fd, int err_fd) {
     int p[2];
@@ -81,7 +83,10 @@ int child_run(const char *root, char *const argv[], Jail jail, char *out, size_t
         /* drop authority, fail closed: a child that cannot be jailed does not run. */
         char **env = tool_env();
         if (!env || sandbox_apply(jail) != 0) _exit(125);
-        execvpe(argv[0], argv, env);
+        /* the search for argv[0] uses the worker's fixed PATH, not bench's: glibc execvpe
+           searches the caller's environ, so swap it in before a plain execvp. */
+        environ = env;
+        execvp(argv[0], argv);
         _exit(127);
     }
     close(p[1]);

@@ -214,7 +214,8 @@ nothing more. Tool children are limited by the C supervisor:
 - **landlock**, `EXEC` children only: writes allowed under `hold/`, `proposed/`, `tests/proposed/`.
   `TEST` children run without landlock (the test runner needs `/tmp`, now private); the namespace and
   then the frame's post-conditions cover what they must not change.
-- **env**: fixed `PATH`, no `LD_PRELOAD` / `PYTHONPATH`; only `LANG`, `LC_*`, `TZ` pass through.
+- **env**: fixed `PATH=/usr/bin:/bin` (also the one `python3` is looked up on), no `LD_PRELOAD` /
+  `PYTHONPATH`; only `LANG`, `LC_*`, `TZ` pass through.
 - **ROM crown**: `run`, `demo` and `restore` exit 4 if `tests/rom` no longer matches the hash baked at build.
 - **timeout**: each `EXEC`/`TEST` child is killed after `T_tool` (5 s).
 - **output ceiling**: a child's stdout to `out-<n>` is killed past `OUT_CEIL_BYTES` (1 MiB), so a

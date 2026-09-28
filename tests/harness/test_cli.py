@@ -1774,6 +1774,15 @@ class TestCage(unittest.TestCase):
         out = w.session() / "out-1"
         self.assertEqual(out.read_text() if out.exists() else "", "")
 
+    def test_worker_finds_python_on_its_own_path(self):
+        # the worker env's PATH (/usr/bin:/bin) finds the interpreter, whatever bench's PATH is.
+        w = addWorld(self)
+        w.env["PATH"] = "/nonexistent"
+        w.tool("which.py", "import os\nprint(os.environ['PATH'])\n")
+        r = w.bench("run", w.script("EXEC tools/which.py\n"))
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertEqual((w.session() / "out-1").read_text(), "/usr/bin:/bin\n")
+
     def test_landlock_denies_write_to_rom(self):
         w = addWorld(self)
         w.tool("pwn.py", "open('tests/rom/pwn.py', 'w').write('x')\n")
