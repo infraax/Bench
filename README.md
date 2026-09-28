@@ -1,18 +1,66 @@
 # Bench
 
-**Bench is a custody kernel for agent work, not an agent.** It gives an unreliable worker (the
-*intern*) five verbs, runs each one as a framed step under a clock and quotas, keeps a sealed,
-content-hashed snapshot after every step, and lets only the owner crown anything into the main
-tree. Whatever loop drives the intern — a script, a model, another harness — sits on top.
+[![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue)](LICENSE)
+[![Platform: Linux](https://img.shields.io/badge/platform-Linux-informational)](#requirements)
+[![Hosted CI: compile + make test-rom](https://img.shields.io/badge/hosted%20CI-compile%20%2B%20make%20test--rom-lightgrey)](docs/ci.md)
 
-```
-owner ──arms──▶ bench run ──frames──▶ READ · WRITE · EXEC · TEST · WAIT ──▶ snapshot after every step
-                  │                                                        (sealed, sha256)
-                  └─ helper (veto)        workers see only the world; main/ and ROM are read-only
+**Bench is the custody crypt, not an agent.** An agent loop is somebody else's: it thinks, it
+calls a model, it decides what to try. Bench is the room that loop works in. It hands the worker
+(the *intern*) five verbs and nothing else, runs each one as a framed step under a clock and
+quotas, keeps a sealed, content-hashed snapshot after every step, and lets only the owner crown
+anything into the main tree. The intern can labor in quarantine; it cannot arm the room, widen
+its own budget, or touch what the owner owns. There is no model in this tree.
+
+### Who starts whom
+
+```mermaid
+flowchart LR
+    owner(["owner"])
+    intern(["intern (a script or an outside loop)"])
+    bench["bench run<br/>frame clock · gate · quotas · lamps"]
+    helper["bench-helper<br/>PING · ARM_OK · FRAME_OK"]
+    worker["worker child<br/>EXEC tools/*.py · TEST tests/rom/*.py<br/>world-only view · landlock · seccomp"]
+    lock[("sessions/LOCK")]
+    token[("OWNER_TOKEN")]
+    evidence[("sessions/ID/<br/>snap-k/ · out-n · log")]
+
+    owner -->|"arms"| token
+    owner -->|"starts"| bench
+    intern -->|"five verbs, one line per step"| bench
+    bench -->|"re-checks before every frame"| token
+    bench -->|"holds for the whole run"| lock
+    bench <-->|"mailbox: unix socket, parent-only"| helper
+    bench -->|"fork per EXEC / TEST, knife at T_tool"| worker
+    worker -->|"stdout + stderr pipe"| bench
+    bench -->|"snapshot after every step, sealed + sha256"| evidence
 ```
 
-Product tip: branch `claude/handoff-start-004f8n`; the default branch is the owner's setting
-(see [`docs/RELEASE.md`](docs/RELEASE.md)). License: **MIT OR Apache-2.0**.
+The intern has no path to the helper, the token, the lock or the log: it only hands `bench` lines
+of text, which the parser accepts as one of five verbs or refuses with a rule id.
+
+### How the layers stack
+
+```mermaid
+flowchart TB
+    loop["agent loop / model<br/>(not in this tree)"]
+    crown["spec/ + tests/rom/ — the crown<br/>frozen meaning, ROM hash baked at build"]
+    isa["ISA — five verbs<br/>READ · WRITE · EXEC · TEST · WAIT"]
+    sup["supervisor/ — the frame<br/>clock · gate · token · quotas · snapshots · lamps"]
+    tools["tools/ — hash.py · peek.py · test_runner.py"]
+    world["world dirs — main/ (owned) · hold/ (quarantine) · sessions/ (evidence)"]
+
+    loop -.->|"drives the intern"| isa
+    crown -->|"defines and checks"| isa
+    isa -->|"parsed and framed by"| sup
+    sup -->|"runs, jailed"| tools
+    sup -->|"reads, snapshots, guards"| world
+    tools -->|"write only hold/ + proposed/"| world
+```
+
+More: [`docs/architecture.md`](docs/architecture.md) (the frame step by step, rings, workers).
+
+Product tip: the repository's default branch — an owner setting (see [`docs/github.md`](docs/github.md)).
+License: **MIT OR Apache-2.0**.
 
 ## Requirements
 
