@@ -9,8 +9,9 @@ workers are not traced, so they see their parent vanish exactly as they would at
 After each kill, held to:
   P1 no torn evidence   every snap-<k> on disk verifies (bench verify + evidence-audit);
                         a half-built snap exists only as snap-<k>.tmp
-  P2 honest status      the killed session reads crashed (or has no STATE yet), never ok/run
-                        with a live lock
+  P2 honest status      a killed session never says ok unless every op was framed (STATE=ok is
+                        the commit point; a kill after it, removing PID, is a finished run),
+                        and never run with a live lock
   P3 recoverable        the next clean run exits 0 and verifies; the world lock is free
   P4 nothing outlives   within 2 s of the kill, no process has its cwd in the world
                         (a worker or helper that keeps writing hold/ after its supervisor died
@@ -33,7 +34,7 @@ IMAGE = Path(__file__).resolve().parents[2]
 BENCH = IMAGE / "supervisor" / "bench"
 sys.path.insert(0, str(IMAGE / "tests" / "deep"))
 sys.path.insert(0, str(IMAGE / "tests" / "harness"))
-from fault_sweep import WORKLOAD, check_world, orphans, sessions, whole  # noqa: E402
+from fault_sweep import OPS, WORKLOAD, check_world, orphans, sessions, whole  # noqa: E402
 from test_cli import World, rmtree_force  # noqa: E402
 
 SYSCALLS = ["openat", "write", "rename", "renameat", "renameat2", "mkdir", "mkdirat", "link", "linkat",
@@ -106,8 +107,12 @@ def main():
                 if killed:
                     for sid in new:
                         st = w.root / "sessions" / sid / "STATE"
-                        if st.exists() and re.search(r"^status=ok", st.read_text(), re.M):
-                            v.append(f"P2 {sid} says ok but its supervisor was killed")
+                        # STATE=ok is the commit point: a kill after it (removing PID, printing
+                        # status) leaves a finished session, which may say ok. before it, never.
+                        steps = sum(1 for m in (w.root / "sessions" / sid).glob("snap-*/MANIFEST")
+                                    if re.search(r"^why=step$", m.read_text(), re.M))
+                        if st.exists() and re.search(r"^status=ok", st.read_text(), re.M) and steps < OPS:
+                            v.append(f"P2 {sid} says ok after {steps}/{OPS} steps, but its supervisor was killed")
                     status = subprocess.run([str(BENCH), "status", "--line"], cwd=IMAGE, env=w.env,
                                             stdout=subprocess.PIPE, text=True).stdout
                     if " run n=" in status or "lock=held" in status:
