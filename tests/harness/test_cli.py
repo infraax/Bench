@@ -1242,61 +1242,68 @@ class TestOutFiles(unittest.TestCase):
 
 
 class TestPostconditions(unittest.TestCase):
-    """a TEST step reads the board. one that moves main/, ROM or the token is a fault, and disarms."""
+    """a TEST step reads the board. two layers keep it honest:
+    1. the namespace (sandbox.c): a TEST child sees main/, ROM and sessions/ read-only, so a move
+       is refused inside the child (EROFS) and nothing moves — asserted below;
+    2. the frame's post-conditions: hash main/, ROM, sessions, the token before and after, and
+       disarm on any move. no TEST can reach layer 2 while layer 1 holds; it stays as the backstop
+       for a kernel where the view could be bypassed."""
 
     def runner(self, w, body):
-        # fixture runner: reports GREEN, and does `body` first. stands in for a crowned test
-        # that touches what it must only read.
-        (w.root / "tools" / "test_runner.py").write_text(body + "\nprint('GREEN 1 tests')\n")
+        # fixture runner: tries `body` (what a crowned test must not do), reports how it went,
+        # then GREEN. stands in for a crowned test that touches what it must only read.
+        src = "try:\n" + "".join(f"    {line}\n" for line in body.splitlines()) + \
+              "    print('MOVED')\nexcept OSError as e:\n    print('refused errno', e.errno)\n" + \
+              "print('GREEN 1 tests')\n"
+        (w.root / "tools" / "test_runner.py").write_text(src)
 
-    def assert_tainted(self, w, r, what):
-        self.assertEqual(r.returncode, 5, r.stdout)
-        self.assertIn(f"moved={what}", r.stdout)
-        self.assertIn("disarmed", r.stdout)
-        self.assertEqual(w.state()["status"], "disarmed")
-        man = (w.snaps()[-1] / "MANIFEST").read_text()
-        self.assertIn("tree=skipped:tainted", man)
-        self.assertFalse((w.snaps()[-1] / "hold").exists())
-        self.assertIn("TAINT", (w.session() / "log").read_text())
+    def assert_refused(self, w, r, k=1):
+        self.assertEqual(r.returncode, 0, r.stdout)
+        out = (w.session() / f"out-{k}").read_text()
+        self.assertIn("refused errno 30", out)          # EROFS: the view, not a permission bit
+        self.assertNotIn("MOVED", out)
+        self.assertNotIn("test-postcondition", r.stdout)
+        self.assertEqual(w.state()["status"], "ok")
 
     def test_clean_test_passes(self):
         w = addWorld(self)
         r = w.bench("run", w.script("TEST PURE tests/rom/test_isa.py\nWAIT 1\n"))
         self.assertEqual(r.returncode, 0, r.stdout)
 
-    def test_moving_main_disarms(self):
+    def test_moving_main_is_refused(self):
         w = addWorld(self)
         self.runner(w, "open('main/moved.txt', 'w').write('x')")
         r = w.bench("run", w.script("TEST PURE tests/rom/test_isa.py\nWAIT 1\n"))
-        self.assert_tainted(w, r, "main")
-        self.assertEqual(w.state()["n"], "1")          # WAIT never ran
+        self.assert_refused(w, r)
+        self.assertFalse((w.root / "main" / "moved.txt").exists())
+        self.assertEqual(w.state()["n"], "2")
 
-    def test_moving_rom_disarms(self):
+    def test_moving_rom_is_refused(self):
         w = addWorld(self)
+        before = (w.root / "tests" / "rom" / "test_isa.py").read_bytes()
         self.runner(w, "open('tests/rom/test_isa.py', 'a').write('# moved\\n')")
-        self.assert_tainted(w, w.bench("run", w.script("TEST PURE tests/rom/test_isa.py\n")), "rom")
+        self.assert_refused(w, w.bench("run", w.script("TEST PURE tests/rom/test_isa.py\n")))
+        self.assertEqual((w.root / "tests" / "rom" / "test_isa.py").read_bytes(), before)
 
-    def test_minting_the_token_disarms_and_quarantines_it(self):
+    def test_minting_the_token_is_refused(self):
         w = addWorld(self)
         w.disarm()
         key = w.root / "owner.key"
         key.write_text("")
         w.env["BENCH_TOKEN"] = str(key)
         self.runner(w, "open('sessions/OWNER_TOKEN', 'w').write('')")
-        r = w.bench("run", w.script("TEST PURE tests/rom/test_isa.py\n"))
-        self.assert_tainted(w, r, "token")
-        self.assertFalse(w.token.exists(), "a minted token was left in place")
-        self.assertEqual(len(list((w.root / "sessions").glob("OWNER_TOKEN.tainted-*"))), 1)
+        self.assert_refused(w, w.bench("run", w.script("TEST PURE tests/rom/test_isa.py\n")))
+        self.assertFalse(w.token.exists(), "a TEST minted the owner token")
         del w.env["BENCH_TOKEN"]
-        self.assertEqual(w.bench("run", w.script("WAIT 1\n")).returncode, 5)   # it arms nothing
+        self.assertEqual(w.bench("run", w.script("WAIT 1\n")).returncode, 5)   # still dark
 
-    def test_touching_the_owner_token_disarms(self):
+    def test_touching_the_owner_token_is_refused(self):
         w = addWorld(self)
+        st0 = w.token.stat()
         self.runner(w, "import os\nst = os.stat('sessions/OWNER_TOKEN')\n"
                        "os.utime('sessions/OWNER_TOKEN', ns=(st.st_atime_ns, st.st_mtime_ns + 10**9))")
-        r = w.bench("run", w.script("TEST PURE tests/rom/test_isa.py\n"))
-        self.assert_tainted(w, r, "token")
-        self.assertFalse(w.token.exists())
+        self.assert_refused(w, w.bench("run", w.script("TEST PURE tests/rom/test_isa.py\n")))
+        self.assertEqual(w.token.stat().st_mtime_ns, st0.st_mtime_ns)
 
     def test_exec_is_not_held_to_test_postconditions(self):
         # EXEC writes hold/ by design; the post-condition is TEST's contract, not EXEC's.
@@ -1304,9 +1311,9 @@ class TestPostconditions(unittest.TestCase):
         w.tool("h.py", "open('hold/x', 'w').write('x')\n")
         self.assertEqual(w.bench("run", w.script("EXEC tools/h.py\n")).returncode, 0)
 
-    def test_editing_a_prior_snapshot_manifest_disarms(self):
-        # a crowned TEST runs unlanded (no landlock) and as root here — it CAN reach sessions/.
-        # rewriting a prior snapshot's MANIFEST must be caught: moved=sessions, disarm.
+    def test_editing_a_prior_snapshot_manifest_is_refused(self):
+        # a TEST runs without landlock and, here, as root: before namespaces it could unseal and
+        # rewrite a prior MANIFEST (caught only by layer 2). now sessions/ is read-only in its view.
         w = addWorld(self)
         self.runner(w, "import os\n"
                        "cur = open('sessions/CURRENT').read().strip()\n"
@@ -1314,10 +1321,11 @@ class TestPostconditions(unittest.TestCase):
                        "os.chmod(d, 0o755); os.chmod(d + '/MANIFEST', 0o644)\n"
                        "open(d + '/MANIFEST', 'a').write('# tamper\\n')")
         r = w.bench("run", w.script("WAIT 1\nTEST PURE tests/rom/test_isa.py\nWAIT 1\n"))
-        self.assert_tainted(w, r, "sessions")
+        self.assert_refused(w, r, k=2)
+        self.assertNotIn("# tamper", (w.snaps()[0] / "MANIFEST").read_text())
+        self.assertEqual(w.bench("verify").returncode, 0)
 
-    def test_editing_a_prior_snapshot_board_disarms(self):
-        # editing a prior snap's stored hold bytes is caught by the session guard too.
+    def test_editing_a_prior_snapshot_board_is_refused(self):
         w = addWorld(self)
         (w.root / "hold" / "keep.txt").write_text("v1\n")
         self.runner(w, "import os\n"
@@ -1326,7 +1334,9 @@ class TestPostconditions(unittest.TestCase):
                        "os.chmod(os.path.dirname(p), 0o755); os.chmod(p, 0o644)\n"
                        "open(p, 'w').write('poison\\n')")
         r = w.bench("run", w.script("WAIT 1\nTEST PURE tests/rom/test_isa.py\n"))
-        self.assert_tainted(w, r, "sessions")
+        self.assert_refused(w, r, k=2)
+        self.assertEqual((w.snaps()[1] / "hold" / "keep.txt").read_text(), "v1\n")
+        self.assertEqual(w.bench("verify").returncode, 0)
 
 
 class TestMailbox(unittest.TestCase):
@@ -1678,6 +1688,91 @@ class TestCage(unittest.TestCase):
         self.assertEqual(r.returncode, 1, r.stdout)
         self.assertIn("rule=sandbox", r.stdout)
         self.assertNotIn("after", (w.session() / "out-1").read_text())
+
+    # ---- namespaces: the tool child sees only the world ----
+
+    def probe(self, w, body, line="EXEC tools/probe.py\n"):
+        w.tool("probe.py", body)
+        r = w.bench("run", w.script(line))
+        return r, (w.session() / "out-1").read_text() if (w.session() / "out-1").exists() else ""
+
+    def test_tool_cannot_read_outside_the_world(self):
+        w = addWorld(self)
+        outside = IMAGE / "README.md"                   # the image itself is outside the world
+        r, out = self.probe(w, "import os\n"
+                               "for p in ['/etc/passwd', '/etc/shadow', '/proc/self/status', '/root', %r]:\n"
+                               "    print(p, os.path.exists(p))\n"
+                               "print('root', sorted(os.listdir('/')))\n" % str(outside))
+        self.assertEqual(r.returncode, 0, r.stdout)
+        for p in ("/etc/passwd", "/etc/shadow", "/proc/self/status", "/root", str(outside)):
+            self.assertIn(f"{p} False", out)
+        top = set(re.search(r"root \[(.*)\]", out).group(1).replace("'", "").split(", "))
+        self.assertLessEqual(top, {"bin", "dev", "etc", "lib", "lib32", "lib64", "libx32", "sbin", "tmp", "usr"})
+        self.assertIn("usr", top)
+
+    def test_tool_sees_the_world_at_its_own_path(self):
+        w = addWorld(self)
+        r, out = self.probe(w, "import os\nprint(os.getcwd())\nprint(open('main/hello.txt').read())\n")
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertIn(str(w.root.resolve()), out)
+        self.assertIn("hello bench", out)
+
+    def test_the_seal_binds_against_a_tool(self):
+        # before namespaces the seal was advisory against a same-uid tool (chmod it back).
+        # now sessions/ is read-only in the tool's view: chmod and write both fail with EROFS.
+        w = addWorld(self)
+        self.assertEqual(w.bench("run", w.script("WRITE fs hold/k.txt v1\n", name="a.ops")).returncode, 0)
+        snap = w.snaps()[1]
+        rel = snap.relative_to(w.root)
+        w.tool("probe.py", "import os\n"
+                           "for f in (lambda: os.chmod(%r, 0o644), lambda: open(%r, 'w').write('x')):\n"
+                           "    try:\n        f(); print('MOVED')\n"
+                           "    except OSError as e:\n        print('refused', e.errno)\n"
+                           % (str(rel / "hold" / "k.txt"), str(rel / "MANIFEST")))
+        r = w.bench("run", w.script("EXEC tools/probe.py\n", name="b.ops"))
+        self.assertEqual(r.returncode, 0, r.stdout)
+        out = (w.session() / "out-1").read_text()
+        self.assertEqual(out.count("refused 30"), 2, out)
+        self.assertEqual(oct((snap / "hold" / "k.txt").stat().st_mode & 0o777), "0o444")
+
+    def test_tool_cannot_undo_its_view(self):
+        # remount the world read-write, or open a file outside it by handle: killed by seccomp.
+        w = addWorld(self)
+        for i, (name, call) in enumerate([
+                ("mount_setattr", "libc.syscall(442, -100, b'/', 0, ctypes.create_string_buffer(32), 32)"),
+                ("open_tree", "libc.syscall(428, -100, b'/', 1)"),
+                ("open_by_handle_at", "libc.syscall(304, -100, ctypes.create_string_buffer(64), 0)")]):
+            with self.subTest(call=name):
+                w.tool(f"u{i}.py", "import ctypes\nprint('before', flush=True)\n"
+                                   "libc = ctypes.CDLL(None, use_errno=True)\n"
+                                   f"{call}\nprint('after', flush=True)\n")
+                r = w.bench("run", w.script(f"EXEC tools/u{i}.py\n", name=f"u{i}.ops"))
+                self.assertEqual(r.returncode, 1, r.stdout)
+                self.assertIn("rule=sandbox", r.stdout)
+
+    def test_test_tmp_is_private(self):
+        w = addWorld(self)
+        mark = f"bench-private-{os.getpid()}-{time.monotonic_ns()}"
+        (w.root / "tools" / "test_runner.py").write_text(
+            f"open('/tmp/{mark}', 'w').write('x')\nprint('GREEN 1 tests')\n")
+        r = w.bench("run", w.script("TEST PURE tests/rom/test_isa.py\n"))
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertFalse(Path("/tmp", mark).exists(), "a TEST wrote the host's /tmp")
+
+    def test_isolation_that_cannot_be_set_up_fails_closed(self):
+        # hold/ as a link out of the world cannot be given to a tool read-write: the child does
+        # not run at all (rc=125), rather than run with a wider view.
+        w = addWorld(self)
+        elsewhere = Path(tempfile.mkdtemp(prefix="bench-out-"))
+        self.addCleanup(rmtree_force, elsewhere)
+        rmtree_force(w.root / "hold")
+        (w.root / "hold").symlink_to(elsewhere)
+        w.tool("probe.py", "print('ran')\n")
+        r = w.bench("run", w.script("EXEC tools/probe.py\n"))
+        self.assertNotEqual(r.returncode, 0, r.stdout)
+        self.assertIn("rc=125", r.stdout)
+        out = w.session() / "out-1"
+        self.assertEqual(out.read_text() if out.exists() else "", "")
 
     def test_landlock_denies_write_to_rom(self):
         w = addWorld(self)

@@ -8,12 +8,17 @@
 #include <string.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <limits.h>
+#include <stdio.h>
+#include <sched.h>
 #include <sys/prctl.h>
+#include <sys/stat.h>
 #include <sys/syscall.h>
 #include <linux/audit.h>
 #include <linux/filter.h>
 #include <linux/seccomp.h>
 #include <linux/landlock.h>
+#include <linux/mount.h>
 #include "sandbox.h"
 
 extern char **environ;
@@ -71,6 +76,26 @@ static int seccomp_deny_ambient(void) {
 #ifdef __NR_io_uring_setup
         __NR_io_uring_setup, __NR_io_uring_enter, __NR_io_uring_register,
 #endif
+        /* the new mount API and file handles: inside its own mount namespace a root tool could
+           clear read-only on the world view (mount_setattr) or open a file outside it by handle
+           (open_by_handle_at). modules, kexec, bpf, perf, reboot, swap, port I/O: root-only
+           doors no tool has business with. */
+        __NR_open_by_handle_at,
+#ifdef __NR_open_tree
+        __NR_open_tree, __NR_move_mount, __NR_fsopen, __NR_fsconfig, __NR_fsmount, __NR_fspick,
+#endif
+#ifdef __NR_mount_setattr
+        __NR_mount_setattr,
+#endif
+#ifdef __NR_open_tree_attr
+        __NR_open_tree_attr,
+#endif
+        __NR_init_module, __NR_finit_module, __NR_delete_module, __NR_kexec_load,
+#ifdef __NR_kexec_file_load
+        __NR_kexec_file_load,
+#endif
+        __NR_bpf, __NR_perf_event_open, __NR_reboot, __NR_swapon, __NR_swapoff,
+        __NR_iopl, __NR_ioperm,
     };
     size_t nk = sizeof deny_kill / sizeof deny_kill[0];
     size_t ne = sizeof deny_errno / sizeof deny_errno[0];
@@ -113,6 +138,154 @@ static int seccomp_deny_ambient(void) {
     return rc;
 }
 
+/* ---- namespaces: the tool child sees only the world ----
+ * a private mount namespace (plus a user namespace when bench is not root, uid/gid mapped to
+ * themselves) holding a fresh tmpfs root with, and only with:
+ *   <world>            the world, read-only, at its own absolute path (cwd stays the same)
+ *   <world>/hold, proposed, tests/proposed   read-write on top of it
+ *   /usr (+ the /lib* /bin /sbin links or dirs, /etc/alternatives)   read-only: the interpreter
+ *                      and its libraries
+ *   /dev/null          the one device
+ *   /tmp               a private tmpfs (the test runner's scratch), gone with the child
+ * everything is nosuid; everything but /dev/null is nodev. the old root is detached after
+ * pivot_root, so nothing outside is reachable by path; the fds a child holds are pipes, the
+ * out file and /dev/null. sessions/ (snaps, token, logs) is read-only: the seal binds against
+ * the tool even as root, and a TEST can no longer mint the token or move main/ or ROM.
+ * seccomp (installed after this) kills mount, the new mount API, pivot_root, chroot, unshare,
+ * setns and open_by_handle_at, so the child cannot undo any of it. any failure: -1, the child
+ * does not run. */
+
+static int sc_open_tree(const char *path) {
+    return (int)syscall(__NR_open_tree, AT_FDCWD, path, OPEN_TREE_CLONE | OPEN_TREE_CLOEXEC | AT_RECURSIVE);
+}
+
+static int sc_setattr(int fd, const char *path, unsigned flags, uint64_t set) {
+    struct mount_attr a = { .attr_set = set };
+    return (int)syscall(__NR_mount_setattr, fd, path, flags, &a, sizeof a);
+}
+
+static int sc_move(int fd, const char *to) {
+    return (int)syscall(__NR_move_mount, fd, "", AT_FDCWD, to, MOVE_MOUNT_F_EMPTY_PATH);
+}
+
+/* a detached, recursive clone of path with the given attributes. -2 if path is missing. */
+static int clone_tree(const char *path, uint64_t attrs) {
+    int fd = sc_open_tree(path);
+    if (fd < 0) return errno == ENOENT ? -2 : -1;
+    if (sc_setattr(fd, "", AT_EMPTY_PATH | AT_RECURSIVE, attrs) != 0) { close(fd); return -1; }
+    return fd;
+}
+
+static int mkdir_p(const char *path) {
+    char b[PATH_MAX];
+    if (snprintf(b, sizeof b, "%s", path) >= (int)sizeof b) return -1;
+    for (char *p = b + 1; *p; p++) {
+        if (*p != '/') continue;
+        *p = 0;
+        if (mkdir(b, 0755) != 0 && errno != EEXIST) return -1;
+        *p = '/';
+    }
+    return mkdir(b, 0755) != 0 && errno != EEXIST ? -1 : 0;
+}
+
+static int write_file(const char *path, const char *text) {
+    int fd = open(path, O_WRONLY | O_CLOEXEC);
+    if (fd < 0) return -1;
+    ssize_t n = (ssize_t)strlen(text);
+    int rc = write(fd, text, (size_t)n) == n ? 0 : -1;
+    close(fd);
+    return rc;
+}
+
+#define NS_STAGE "/tmp"   /* overmounted inside the private namespace only */
+#ifndef MNT_DETACH
+#define MNT_DETACH 2       /* <sys/mount.h>; not included: it clashes with <linux/mount.h> on some libcs */
+#endif
+
+int sandbox_world_only(void) {
+    char w[PATH_MAX], at[PATH_MAX + 64];
+    if (!getcwd(w, sizeof w) || w[0] != '/') return -1;
+    uid_t uid = geteuid();
+    gid_t gid = getegid();
+    int flags = CLONE_NEWNS | CLONE_NEWIPC | (uid != 0 ? CLONE_NEWUSER : 0);
+    if (unshare(flags) != 0) return -1;
+    if (uid != 0) {
+        char m[64];
+        if (write_file("/proc/self/setgroups", "deny")) return -1;
+        snprintf(m, sizeof m, "%u %u 1", (unsigned)uid, (unsigned)uid);
+        if (write_file("/proc/self/uid_map", m)) return -1;
+        snprintf(m, sizeof m, "%u %u 1", (unsigned)gid, (unsigned)gid);
+        if (write_file("/proc/self/gid_map", m)) return -1;
+    }
+    if (syscall(__NR_mount, NULL, "/", NULL, MS_REC | MS_PRIVATE, NULL) != 0) return -1;
+
+    /* clone everything first: the clones are detached, so overmounting the stage hides nothing
+       they need (a world under /tmp included). */
+    const uint64_t RO = MOUNT_ATTR_RDONLY | MOUNT_ATTR_NOSUID | MOUNT_ATTR_NODEV;
+    const uint64_t RW = MOUNT_ATTR_NOSUID | MOUNT_ATTR_NODEV;
+    static const char *const RW_SUB[] = {"hold", "proposed", "tests/proposed"};
+    /* /etc/alternatives: on Debian-family images /usr/bin/python3 is a link through it. the rest
+       of /etc stays out (a root tool could read /etc/shadow). */
+    static const char *const SYS[] = {"/usr", "/lib", "/lib64", "/lib32", "/libx32", "/bin", "/sbin",
+                                      "/etc/alternatives"};
+    enum { NRW = sizeof RW_SUB / sizeof *RW_SUB, NSYS = sizeof SYS / sizeof *SYS };
+    int world = clone_tree(".", RO), rw[NRW], sys[NSYS], nul = -1, rc = -1;
+    char link_to[NSYS][PATH_MAX];
+    for (int i = 0; i < NRW; i++) rw[i] = -1;
+    for (int i = 0; i < NSYS; i++) { sys[i] = -1; link_to[i][0] = 0; }
+    if (world < 0) goto out;
+    for (int i = 0; i < NRW; i++) {
+        struct stat st;
+        if (lstat(RW_SUB[i], &st) != 0) { if (errno == ENOENT) continue; goto out; }
+        if (!S_ISDIR(st.st_mode)) goto out;          /* hold -> elsewhere would be a way out */
+        if ((rw[i] = clone_tree(RW_SUB[i], RW)) < 0) goto out;
+    }
+    for (int i = 0; i < NSYS; i++) {
+        struct stat st;
+        if (lstat(SYS[i], &st) != 0) continue;
+        if (S_ISLNK(st.st_mode)) {
+            ssize_t l = readlink(SYS[i], link_to[i], sizeof link_to[i] - 1);
+            if (l <= 0) goto out;
+            link_to[i][l] = 0;
+        } else if (S_ISDIR(st.st_mode) && (sys[i] = clone_tree(SYS[i], RO)) < 0) goto out;
+    }
+    if ((nul = clone_tree("/dev/null", MOUNT_ATTR_RDONLY | MOUNT_ATTR_NOSUID)) < 0) goto out;
+
+    /* the new root: a small tmpfs, built, then pivoted into and made read-only. */
+    if (syscall(__NR_mount, "bench", NS_STAGE, "tmpfs", MS_NOSUID | MS_NODEV, "size=1m,mode=0755") != 0) goto out;
+    /* the private /tmp goes in before the world, so a world that lives under /tmp is mounted
+       on top of it, not hidden by it. */
+    if (mkdir(NS_STAGE "/tmp", 0755) != 0 ||
+        syscall(__NR_mount, "bench-tmp", NS_STAGE "/tmp", "tmpfs", MS_NOSUID | MS_NODEV, "size=64m,mode=1777") != 0)
+        goto out;
+    if (snprintf(at, sizeof at, NS_STAGE "%s", w) >= (int)sizeof at || mkdir_p(at) || sc_move(world, at)) goto out;
+    for (int i = 0; i < NRW; i++) {
+        if (rw[i] < 0) continue;
+        if (snprintf(at, sizeof at, NS_STAGE "%s/%s", w, RW_SUB[i]) >= (int)sizeof at || sc_move(rw[i], at)) goto out;
+    }
+    for (int i = 0; i < NSYS; i++) {
+        if (snprintf(at, sizeof at, NS_STAGE "%s", SYS[i]) >= (int)sizeof at) goto out;
+        if (link_to[i][0] && symlink(link_to[i], at) != 0) goto out;
+        if (sys[i] >= 0 && (mkdir_p(at) || sc_move(sys[i], at))) goto out;
+    }
+    if (mkdir(NS_STAGE "/dev", 0755) != 0) goto out;
+    int f = open(NS_STAGE "/dev/null", O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0666);
+    if (f < 0) goto out;
+    close(f);
+    if (sc_move(nul, NS_STAGE "/dev/null")) goto out;
+    if (mkdir(NS_STAGE "/.old", 0700) != 0 || syscall(__NR_pivot_root, NS_STAGE, NS_STAGE "/.old") != 0) goto out;
+    if (chdir("/") != 0 || syscall(__NR_umount2, "/.old", MNT_DETACH) != 0 || rmdir("/.old") != 0) goto out;
+    if (sc_setattr(AT_FDCWD, "/", 0, MOUNT_ATTR_RDONLY) != 0) goto out;
+    if (chdir(w) != 0) goto out;
+    rc = 0;
+out:
+    if (world >= 0) close(world);
+    if (nul >= 0) close(nul);
+    for (int i = 0; i < NRW; i++) if (rw[i] >= 0) close(rw[i]);
+    for (int i = 0; i < NSYS; i++) if (sys[i] >= 0) close(sys[i]);
+    return rc;
+}
+
 /* ---- landlock: write only under hold/ and proposed/, read everywhere ---- */
 
 static int ll_add_path(int fd, const char *path, uint64_t allowed) {
@@ -145,7 +318,9 @@ static int landlock_write_jail(void) {
 }
 
 int sandbox_apply(Jail jail) {
-    /* landlock first (needs open() on the tree), then seccomp which narrows syscalls. */
+    /* namespaces first (they need mount and unshare), then landlock (needs open() on the
+       tree it now sees), then seccomp, which takes those syscalls away for good. */
+    if (sandbox_world_only() != 0) return -1;
     if (jail == JAIL_FULL && landlock_write_jail() != 0) return -1;
     if (seccomp_deny_ambient() != 0) return -1;
     return 0;

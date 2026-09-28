@@ -81,11 +81,10 @@ Ordered. Each is a supervisor change or a tool, never a verb. (Sessions 3–4 cl
 - **Overnight N.** N > 8 is `SET_LOOP`, Ring 0. Needs: a notch file the owner writes (N, K, T_*,
   quotas) hashed into s0; the K-snap cadence actually exercised; `T_session` binding (next #5);
   retention sized for long runs.
-- **Tool children under their own uid.** Today a tool runs as the owner (root here), so it can read any
-  file the owner can and chmod past a snap seal — the seal is advisory against it and `bench verify` is
-  the guarantee. Running each tool child as an unprivileged uid (or in a mount namespace that shows only
-  the world) would make the seal binding against tools too and close read-outside-the-world. This is
-  `sandbox.c` / kernel-policy work — deliberately out of scope until the owner asks for it.
+- **Tool children: PID namespace, own uid.** Done (2026-09-28): a mount namespace shows each tool only
+  the world, read-only except `hold/`/`proposed/` — seal binding, reads outside the world gone. Left:
+  a PID namespace (a tool can still signal same-uid processes; needs a double fork in `child_run`)
+  and an unprivileged uid for tools when bench runs as root.
 - **Radio as an explicit plug.** Today radio is always pulled and tool children get `EPERM` on the
   network. A radio notch would be: owner flips the plug bit for one session, BLIND goes dark, the
   lamp byte finally carries information, and only the two notch tools in `TOOLBOX.md` (`fetch`,

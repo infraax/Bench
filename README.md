@@ -93,7 +93,7 @@ gate → [TEST: read board] → tool → [TEST: post-conditions] → quotas → 
 all in `frame()` (`supervisor/frame.c`).
 
 - **gate**: KILL, then the pinned token, then helper `FRAME_OK`. A stop here is no step and no snap.
-- **TEST post-conditions**: before a `TEST`, the frame hashes `main/`, `tests/rom/`, and the session's
+- **TEST post-conditions** (the second layer; the namespace view refuses these moves first): before a `TEST`, the frame hashes `main/`, `tests/rom/`, and the session's
   frozen artifacts (`SESSION`, `OPS`, every prior `snap-*/`), and stats the token files; after it,
   again — whatever the test reported. `TEST` children run without landlock and, here, as root, so they
   can reach `sessions/` where `EXEC` cannot; this catches a test that rewrites a prior snapshot.
@@ -194,7 +194,7 @@ unix socket it creates at `sessions/<id>/helper.sock`. This machine only; no int
   refuse, never arm alone.
 - Missing, silent (2 s), garbled or wrong-version helper: exit 6, no `CURRENT`, no frames.
 
-## Tool children (current behavior; `sandbox.c` unchanged)
+## Tool children
 
 `is_ring0` is a source check — it stops an accidental network or spawn import in a ROM file,
 nothing more. Tool children are limited by the C supervisor:
@@ -202,9 +202,18 @@ nothing more. Tool children are limited by the C supervisor:
 - **seccomp**, every tool child: network syscalls return `EPERM`; ptrace, mount, namespace,
   key-ring and io_uring syscalls terminate the child (SIGSYS → `rule=sandbox` in the evidence).
   io_uring is killed because a ring does I/O this per-syscall filter never sees.
+- **namespaces**, every tool child: a private mount namespace (plus a user namespace, uid/gid mapped
+  to themselves, when bench is not root) whose root is a fresh tmpfs holding only the world at its
+  own path (read-only, with `hold/`, `proposed/`, `tests/proposed/` read-write on top), `/usr` and the
+  `/lib*` `/bin` `/sbin` links, `/etc/alternatives`, `/dev/null` and a private `/tmp`. Old root
+  detached after `pivot_root`; everything nosuid, all but `/dev/null` nodev. So a tool cannot read
+  outside the world (`/etc`, `/proc`, `$HOME`, the image are gone), and `main/`, `tests/rom/` and
+  `sessions/` are read-only **to every tool, root included**: the snapshot seal binds, and a `TEST`
+  cannot mint the token or move ROM. If the view cannot be built, the child does not run (`rc=125`).
+  Cost: ~0.8 ms per child (`make perf`, `/bin/true` 1.5 → 2.2 ms; full jail on a python boot +1.5 ms).
 - **landlock**, `EXEC` children only: writes allowed under `hold/`, `proposed/`, `tests/proposed/`.
-  `TEST` children run without landlock (the test runner needs `/tmp`); the frame's post-conditions
-  cover what they must not change.
+  `TEST` children run without landlock (the test runner needs `/tmp`, now private); the namespace and
+  then the frame's post-conditions cover what they must not change.
 - **env**: fixed `PATH`, no `LD_PRELOAD` / `PYTHONPATH`; only `LANG`, `LC_*`, `TZ` pass through.
 - **ROM crown**: `run`, `demo` and `restore` exit 4 if `tests/rom` no longer matches the hash baked at build.
 - **timeout**: each `EXEC`/`TEST` child is killed after `T_tool` (5 s).
@@ -218,9 +227,10 @@ The supervisor's own file ops are anchored, because it runs as the owner, not la
 - **`READ`/`WRITE` act on regular files only.** The final open is `O_NONBLOCK`; a fifo, socket or
   device (which a tool may create in `hold/`) is a fault, not a blocked frame clock.
 
-Known limit: `execve` stays allowed in tool children. A tool can start other programs; they inherit
-the same limits. Tool children run as the same uid here, so mode-bit sealing of snapshots is
-advisory against them — `bench verify` (content hash) is the guarantee.
+Known limits: `execve` stays allowed in tool children — a tool can start other programs; they
+inherit the same limits. Tool children share bench's pid space (no PID namespace yet), so a tool can
+signal processes of the same uid. `bench verify` (content hash) stays the guarantee for snapshots;
+the read-only view is the prevention.
 
 Lamps: MAIN and HOLD are never lit together (HOLD wins). BLIND is lit when fb **and** radio are
 both pulled — always, in foundation.

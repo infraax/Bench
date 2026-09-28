@@ -45,8 +45,12 @@ test: supervisor/bench supervisor/bench-helper supervisor/bus_test
 	fi
 
 # measurements (timing, machine-dependent): fork cost, N parallel worlds vs sequential.
-perf: supervisor/bench supervisor/bench-helper
+supervisor/ns_cost: tests/perf/ns_cost.c supervisor/sandbox.c supervisor/sandbox.h
+	$(CC) $(CFLAGS) -Isupervisor -o $@ tests/perf/ns_cost.c supervisor/sandbox.c
+
+perf: supervisor/bench supervisor/bench-helper supervisor/ns_cost
 	$(PY) tests/perf/perf_fork.py
+	@w=$$(mktemp -d) && mkdir -p $$w/hold $$w/main && (cd $$w && $(CURDIR)/supervisor/ns_cost 50); rc=$$?; rm -rf $$w; exit $$rc
 
 demo: supervisor/bench
 	./supervisor/bench demo
@@ -64,7 +68,7 @@ e2e: supervisor/bench supervisor/bench-helper
 	BENCH_ROOT=$(E2E) ./supervisor/bench demo
 
 clean:
-	rm -f supervisor/bench supervisor/bench-helper supervisor/romhash supervisor/bus_test $(ROMH)
+	rm -f supervisor/bench supervisor/bench-helper supervisor/romhash supervisor/bus_test supervisor/ns_cost $(ROMH)
 	-chmod -R u+rwX sessions 2>/dev/null   # snaps are sealed read-only; unseal before removing
 	find sessions -mindepth 1 ! -name .gitkeep ! -name OWNER_TOKEN -exec rm -rf {} +   # clean does not disarm
 
