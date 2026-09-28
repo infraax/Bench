@@ -71,6 +71,16 @@ test-rom: supervisor/bus_test
 		$(PY) -m unittest discover -s tests/rom -p 'test_*.py' -q; \
 	fi
 
+# the whole harness against bench + helper built with ASan and UBSan (any UB aborts the run), then
+# the normal build is restored. found three qsort(NULL, 0) the plain build hid.
+SAN = -O1 -g -fno-omit-frame-pointer -fsanitize=address,undefined -fno-sanitize-recover=undefined
+test-sanitize: $(ROMH) supervisor/bus_test
+	$(CC) -std=c11 -Wall -Wextra -Werror $(SAN) -o supervisor/bench $(BENCH_SRC)
+	$(CC) -std=c11 -Wall -Wextra -Werror $(SAN) -o supervisor/bench-helper supervisor/helper.c supervisor/arm.c
+	@ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=print_stacktrace=1 \
+		$(PY) -m unittest discover -s tests/harness -p 'test_*.py' -q; rc=$$?; \
+		rm -f supervisor/bench supervisor/bench-helper; $(MAKE) --no-print-directory all >/dev/null; exit $$rc
+
 # the site cannot drift from the tree: rule/ops data regenerated from refusal.c + the ROM ops table,
 # and the playground's parser mirror checked against every OPS_TABLE row (needs node).
 site-check:
@@ -97,4 +107,4 @@ clean:
 	-chmod -R u+rwX sessions 2>/dev/null   # snaps are sealed read-only; unseal before removing
 	find sessions -mindepth 1 ! -name .gitkeep ! -name OWNER_TOKEN -exec rm -rf {} +   # clean does not disarm
 
-.PHONY: all test test-rom site-check perf env ledger-test demo e2e clean
+.PHONY: all test test-rom test-sanitize site-check perf env ledger-test demo e2e clean
