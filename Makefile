@@ -52,6 +52,14 @@ perf: supervisor/bench supervisor/bench-helper supervisor/ns_cost
 	$(PY) tests/perf/perf_fork.py
 	@w=$$(mktemp -d) && mkdir -p $$w/hold $$w/main && (cd $$w && $(CURDIR)/supervisor/ns_cost 50); rc=$$?; rm -rf $$w; exit $$rc
 
+# the machine card (installs nothing; exits 2 with the install line if a prerequisite is missing),
+# and `make test` written to ledger/<stamp>-<sha>/ with only a summary on stdout.
+env:
+	@sh scripts/agent-setup.sh
+
+ledger-test:
+	@sh scripts/ledger-run.sh make test
+
 demo: supervisor/bench
 	./supervisor/bench demo
 
@@ -72,4 +80,4 @@ clean:
 	-chmod -R u+rwX sessions 2>/dev/null   # snaps are sealed read-only; unseal before removing
 	find sessions -mindepth 1 ! -name .gitkeep ! -name OWNER_TOKEN -exec rm -rf {} +   # clean does not disarm
 
-.PHONY: all test perf demo e2e clean
+.PHONY: all test perf env ledger-test demo e2e clean

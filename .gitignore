@@ -9,4 +9,7 @@ supervisor/rom_hash.h
 supervisor/bus_test
 supervisor/ns_cost
 supervisor/bench-helper
-research/clones/
+docs/research/clones/
+ledger/**
+!ledger/README.md
+!ledger/.gitkeep
