@@ -2,7 +2,12 @@
 
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue)](LICENSE)
 [![Platform: Linux](https://img.shields.io/badge/platform-Linux-informational)](#requirements)
-[![Hosted CI: compile + make test-rom](https://img.shields.io/badge/hosted%20CI-compile%20%2B%20make%20test--rom-lightgrey)](docs/ci.md)
+[![Push check: compile + make test-rom + site-check](https://img.shields.io/badge/push%20check-compile%20%2B%20test--rom%20%2B%20site--check-lightgrey)](docs/ci.md)
+[![Site: infraax.github.io/Bench](https://img.shields.io/badge/site-infraax.github.io%2FBench-e8c547)](https://infraax.github.io/Bench/)
+
+**Site: <https://infraax.github.io/Bench/>** — architecture, a script [playground](https://infraax.github.io/Bench/playground/),
+every refusal [rule](https://infraax.github.io/Bench/rules/), measured costs, and a machine side for agents
+([`llms.txt`](https://infraax.github.io/Bench/llms.txt), [`/api/*.json`](https://infraax.github.io/Bench/api/index.json)).
 
 **Bench is the custody crypt, not an agent.** An agent loop is somebody else's: it thinks, it
 calls a model, it decides what to try. Bench is the room that loop works in. It hands the worker

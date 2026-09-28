@@ -1,0 +1,5 @@
+---
+layout: null
+permalink: /api/ops.json
+---
+{{ site.data.ops | jsonify }}

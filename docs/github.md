@@ -47,11 +47,14 @@ On the repository home page, **About → ⚙ (edit)**:
 
 ## Actions
 
-- The workflow `.github/workflows/test.yml` (job `rom-and-compile`) is already in the tree: it runs
-  `make all` and `make test-rom`. It does not run the full worker suite ([`ci.md`](ci.md)).
-- If runs fail with "no runner assigned": **Settings → Actions → General → Actions permissions**
-  → allow actions; and for a private repository, **Settings (account or org) → Billing and
-  plans** → Actions minutes / spending limit.
+- One workflow, `check` (`.github/workflows/test.yml`), on every push: `make all`,
+  `make test-rom`, `make site-check`. No third-party actions. It does not run the worker suite
+  ([`ci.md`](ci.md)).
+- **Runs fail in 3–5 s with no steps and no logs?** Open the run page: the annotation names the
+  reason. On 2026-09-28 it was *"your account is locked due to a billing issue"* — **Settings (your
+  account) → Billing and plans →** fix the payment method or the lock. Public repositories use
+  standard runners for free, but a locked account runs none. Pages builds are separate and kept
+  working, which is why the site deployed while every check failed.
 
 ## Security
 

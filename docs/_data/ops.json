@@ -1,0 +1,227 @@
+[
+ {
+  "line": "READ  fs main/hello.txt",
+  "expect": "ok",
+  "rule": null
+ },
+ {
+  "line": "read fs main/hello.txt",
+  "expect": "ok",
+  "rule": null
+ },
+ {
+  "line": "WRITE fs hold/out.txt hello",
+  "expect": "ok",
+  "rule": null
+ },
+ {
+  "line": "WRITE fs proposed/tests/test_x.py x",
+  "expect": "ok",
+  "rule": null
+ },
+ {
+  "line": "EXEC  tools/hash.py main/hello.txt",
+  "expect": "ok",
+  "rule": null
+ },
+ {
+  "line": "TEST  PURE tests/rom/test_isa.py",
+  "expect": "ok",
+  "rule": null
+ },
+ {
+  "line": "WAIT  1",
+  "expect": "ok",
+  "rule": null
+ },
+ {
+  "line": "# a comment is a comment track",
+  "expect": "ok",
+  "rule": null
+ },
+ {
+  "line": "READ fs",
+  "expect": "needs <slot> <path>",
+  "rule": "shape-rw"
+ },
+ {
+  "line": "READ fs main/hello.txt extra",
+  "expect": "no payload",
+  "rule": "read-payload"
+ },
+ {
+  "line": "WAIT",
+  "expect": "needs <ms>",
+  "rule": "wait-shape"
+ },
+ {
+  "line": "WAIT -1",
+  "expect": "not a number",
+  "rule": "wait-shape"
+ },
+ {
+  "line": "WAIT 1s",
+  "expect": "not a number",
+  "rule": "wait-shape"
+ },
+ {
+  "line": "WAIT 3600001",
+  "expect": "not a number",
+  "rule": "wait-shape"
+ },
+ {
+  "line": "WAIT 6000",
+  "expect": "T_tool",
+  "rule": "t-tool"
+ },
+ {
+  "line": "TEST tests/rom/test_isa.py",
+  "expect": "without kind",
+  "rule": "test-kind"
+ },
+ {
+  "line": "TEST PURE",
+  "expect": "needs <kind> <path>",
+  "rule": "test-shape"
+ },
+ {
+  "line": "TEST PURE tests/rom/test_isa.py more",
+  "expect": "<kind> <path> only",
+  "rule": "test-shape"
+ },
+ {
+  "line": "WRITE fs main/owned.txt x",
+  "expect": "ring",
+  "rule": "write-ring"
+ },
+ {
+  "line": "WRITE fs tests/rom/test_x.py x",
+  "expect": "ring",
+  "rule": "write-ring"
+ },
+ {
+  "line": "WRITE fs sessions/OWNER_TOKEN x",
+  "expect": "ring",
+  "rule": "write-ring"
+ },
+ {
+  "line": "WRITE fs ../escape x",
+  "expect": "escapes",
+  "rule": "path-escape"
+ },
+ {
+  "line": "WRITE fs /etc/x x",
+  "expect": "escapes",
+  "rule": "path-escape"
+ },
+ {
+  "line": "READ fs ../x",
+  "expect": "escapes",
+  "rule": "path-escape"
+ },
+ {
+  "line": "EXEC tools/x.sh",
+  "expect": "tools/*.py only",
+  "rule": "exec-prog"
+ },
+ {
+  "line": "EXEC main/x.py",
+  "expect": "tools/*.py only",
+  "rule": "exec-prog"
+ },
+ {
+  "line": "EXEC tools/../supervisor/x.py",
+  "expect": "tools/*.py only",
+  "rule": "exec-prog"
+ },
+ {
+  "line": "EXEC tools/hash.py ../x",
+  "expect": "arg escapes",
+  "rule": "exec-arg"
+ },
+ {
+  "line": "TEST PURE tests/proposed/test_x.py",
+  "expect": "tests/rom/*.py only",
+  "rule": "test-path"
+ },
+ {
+  "line": "TEST PURE tests/rom/../x.py",
+  "expect": "tests/rom/*.py only",
+  "rule": "test-path"
+ },
+ {
+  "line": "READ fb main/hello.txt",
+  "expect": "unplugged",
+  "rule": "slot-pulled"
+ },
+ {
+  "line": "READ radio main/hello.txt",
+  "expect": "unplugged",
+  "rule": "slot-pulled"
+ },
+ {
+  "line": "READ disk main/hello.txt",
+  "expect": "unknown",
+  "rule": "slot-unknown"
+ },
+ {
+  "line": "TEST JUDGE tests/rom/test_isa.py",
+  "expect": "unplugged",
+  "rule": "judge-pulled"
+ },
+ {
+  "line": "TEST VISUAL tests/rom/test_isa.py",
+  "expect": "unplugged",
+  "rule": "visual-pulled"
+ },
+ {
+  "line": "BROWSE http://x",
+  "expect": "unknown verb",
+  "rule": "verb-unknown"
+ },
+ {
+  "line": "CLICK 10 10",
+  "expect": "unknown verb",
+  "rule": "verb-unknown"
+ },
+ {
+  "line": "PING",
+  "expect": "unknown verb",
+  "rule": "verb-unknown"
+ },
+ {
+  "line": "ARM_OK",
+  "expect": "unknown verb",
+  "rule": "verb-unknown"
+ },
+ {
+  "line": "FRAME_OK 1",
+  "expect": "unknown verb",
+  "rule": "verb-unknown"
+ },
+ {
+  "line": "INSTALL_ROM tests/proposed/t.py",
+  "expect": "supervisor",
+  "rule": "verb-super"
+ },
+ {
+  "line": "SET_LOOP 99",
+  "expect": "supervisor",
+  "rule": "verb-super"
+ },
+ {
+  "line": "KILL",
+  "expect": "supervisor",
+  "rule": "verb-super"
+ },
+ {
+  "line": "UNPLUG radio",
+  "expect": "supervisor",
+  "rule": "verb-super"
+ },
+ {
+  "line": "unplug radio",
+  "expect": "supervisor",
+  "rule": "verb-super"
+ }
+]

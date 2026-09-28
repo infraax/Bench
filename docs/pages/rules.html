@@ -1,0 +1,54 @@
+---
+title: Rules
+nav: rules
+permalink: /rules/
+wide: true
+description: Every refusal bench can emit — its stable id, when it fires, the one-line fix, and lines that trigger it.
+---
+<h1>Rules</h1>
+<p class="board__line">Every "no" has a name and a fix.</p>
+
+<p>When bench refuses a line it prints the rule under the fault, and a refused step's MANIFEST
+carries <code>rule=&lt;id&gt;</code>. Each id below is stable — link to it as
+<code>/rules/#&lt;id&gt;</code>. Generated from <code>supervisor/refusal.c</code>; the same table is
+<code>bench rules</code> on your machine and <a href="{{ '/api/rules.json' | relative_url }}"><code>/api/rules.json</code></a> here.</p>
+
+<pre class="sample"><code>FAULT line 2: ring: intern writes hold/ or proposed/ only, not main/x
+  rule=write-ring fix: write under hold/ or proposed/; main/ is Ring 0</code></pre>
+
+<div data-rules>
+  <div class="filters" role="group" aria-label="Filter rules">
+    <label class="search"><span class="sr">Search rules</span><input type="search" placeholder="search id or fix…" data-q></label>
+    <button type="button" data-phase="all" aria-pressed="true">All</button>
+    <button type="button" data-phase="parse" aria-pressed="false">Parse</button>
+    <button type="button" data-phase="run" aria-pressed="false">Run</button>
+    <button type="button" data-phase="gate" aria-pressed="false">Gate</button>
+    <span class="mute" data-rcount aria-live="polite"></span>
+  </div>
+
+  <dl class="phases">
+    <dt><span class="phase phase--parse">parse</span></dt><dd>the line dies at birth: the whole script is refused before any frame; no session.</dd>
+    <dt><span class="phase phase--run">run</span></dt><dd>the step was framed and refused: snapped with <code>rule=</code> in its evidence, then the run stops.</dd>
+    <dt><span class="phase phase--gate">gate</span></dt><dd>the frame never ran (kill, disarm, helper lost): no step, no snap.</dd>
+  </dl>
+
+  <div class="rules">
+    {% for r in site.data.rules %}
+    <article class="rule" id="{{ r.id }}" data-phase="{{ r.phase }}" data-text="{{ r.id }} {{ r.fix | escape }}">
+      <header class="rule__head">
+        <a class="rule__id" href="#{{ r.id }}">{{ r.id }}</a>
+        <span class="phase phase--{{ r.phase }}">{{ r.phase }}</span>
+      </header>
+      <p class="rule__fix">{{ r.fix | escape }}</p>
+      {% assign hits = site.data.ops | where: "rule", r.id %}
+      {% if hits.size > 0 %}
+      <p class="rule__hits">triggered by:
+        {% for h in hits limit: 3 %}<a href="{{ '/playground/' | relative_url }}#s={{ h.line | uri_escape }}"><code>{{ h.line | escape }}</code></a>{% unless forloop.last %} · {% endunless %}{% endfor %}
+      </p>
+      {% endif %}
+    </article>
+    {% endfor %}
+  </div>
+</div>
+<p class="caption">{{ site.data.rules | size }} rules. Rows marked "triggered by" come from the ROM truth table
+(<code>tests/rom/test_ops.py</code>) and open in the <a href="{{ '/playground/' | relative_url }}">playground</a>.</p>
