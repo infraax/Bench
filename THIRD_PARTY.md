@@ -20,8 +20,8 @@ generated `supervisor/rom_hash.h`.
 |---|---|---|---|
 | — | — | — | — |
 
-None. Bench does not vendor other harnesses or libraries. `research/` stores only URLs, commit
-SHAs and line counts of the audited repos; `research/fetch.sh` re-fetches them into a gitignored
+None. Bench does not vendor other harnesses or libraries. `docs/research/` stores only URLs, commit
+SHAs and line counts of the audited repos; `docs/research/fetch.sh` re-fetches them into a gitignored
 directory on demand.
 
 ## Runtime, not shipped
