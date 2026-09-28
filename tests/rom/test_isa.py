@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
 """Ring 0: the term algebra. illegal terms die at birth."""
 import dataclasses
 import sys

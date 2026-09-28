@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: MIT OR Apache-2.0 */
 /* arm.h — the owner's token. one answer, shared by bench and bench-helper. */
 #ifndef ARM_H
 #define ARM_H

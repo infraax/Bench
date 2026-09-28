@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
 """Ring 0: the refusal truth table. Every rejection bench emits names a rule; every rule has a fix.
 
 RULES mirrors supervisor/refusal.c (the harness compares it with `bench rules`).

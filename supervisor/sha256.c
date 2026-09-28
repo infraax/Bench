@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: MIT OR Apache-2.0 */
 /* sha256.c — FIPS 180-4. public domain. small, correct, no deps.
  * verified against python hashlib and the tools/hash.py tree scheme. */
 #define _POSIX_C_SOURCE 200809L

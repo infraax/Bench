@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: MIT OR Apache-2.0 */
 /* helper.c — bench-helper: the supervisor's mailbox on this machine. three words, one reason.
  *
  *   bench-helper <root> <listen-fd>

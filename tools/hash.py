@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
 """tree hash. sha256 over (relpath, length, bytes), sorted. same tree, same hex.
 
 no clock, no radio. reached only via exec.

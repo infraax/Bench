@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: MIT OR Apache-2.0 */
 /* frame.h — the edges of one step. one thread owns this. */
 #ifndef FRAME_H
 #define FRAME_H

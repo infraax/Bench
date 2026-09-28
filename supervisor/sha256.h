@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: MIT OR Apache-2.0 */
 /* sha256.h — one hash, no library. public domain.
  * a snapshot without a hash is a rumor. this is the C path so the frame does not
  * pay a python interpreter boot to photograph the board. */

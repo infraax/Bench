@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: MIT OR Apache-2.0 */
 /* sandbox.h — conservation of authority.
  *
  * a child of the supervisor gets fewer rights than the supervisor, dropped in the

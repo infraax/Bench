@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: MIT OR Apache-2.0 */
 /* mailbox.h — bench's side of the helper mailbox. see helper.c for the three words. */
 #ifndef MAILBOX_H
 #define MAILBOX_H

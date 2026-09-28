@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
 # the intern is slop. this file is not.
 # five ops. interned terms. hooks as rewrite. if you need a sixth, you don't.
 

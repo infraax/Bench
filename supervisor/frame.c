@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: MIT OR Apache-2.0 */
 #define _GNU_SOURCE
 /* frame.c — one step is a frame. if it has no edges it is a chat.
  *

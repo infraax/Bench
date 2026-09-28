@@ -1,0 +1,39 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+#
+# Hosted CI proves the build and the algebra: `make all` (C, -Werror) and `make test-rom`
+# (exhaustive bus test + Ring-0 ROM suite). It does NOT run the full `make test`: the harness
+# starts worker children, and their view (mount/user namespaces, landlock, seccomp) needs a Linux
+# box that can build it. A hosted runner is not that box by default, and this workflow does not
+# loosen the runner to pretend otherwise. The full gate is `make ledger-test` on such a box; its
+# ledger row is the record. See docs/ci.md.
+name: test
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  rom-and-compile:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: machine card
+        run: make env
+      - name: compile (make all, -Werror)
+        run: scripts/ledger-run.sh make all
+      - name: ROM and bus (make test-rom)
+        run: scripts/ledger-run.sh make test-rom
+      - name: ledger on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ledger
+          path: |
+            ledger/
+            !ledger/README.md
+            !ledger/.gitkeep
+          if-no-files-found: warn
+          retention-days: 14

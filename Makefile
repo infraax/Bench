@@ -52,6 +52,25 @@ perf: supervisor/bench supervisor/bench-helper supervisor/ns_cost
 	$(PY) tests/perf/perf_fork.py
 	@w=$$(mktemp -d) && mkdir -p $$w/hold $$w/main && (cd $$w && $(CURDIR)/supervisor/ns_cost 50); rc=$$?; rm -rf $$w; exit $$rc
 
+# the machine card (installs nothing; exits 2 with the install line if a prerequisite is missing),
+# and `make test` written to ledger/<stamp>-<sha>/ with only a summary on stdout.
+env:
+	@sh scripts/agent-setup.sh
+
+ledger-test:
+	@sh scripts/ledger-run.sh make test
+
+# the algebra only: the exhaustive bus test (C, no worker child) and the Ring-0 ROM suite (pure
+# python, no binary, no worker). what a hosted runner can prove. `make test` is the full gate:
+# it adds the harness, which runs worker children and needs a Linux box that can build their view.
+test-rom: supervisor/bus_test
+	@./supervisor/bus_test
+	@if $(PY) -c "import pytest" 2>/dev/null; then \
+		$(PY) -m pytest tests/rom -q; \
+	else \
+		$(PY) -m unittest discover -s tests/rom -p 'test_*.py' -q; \
+	fi
+
 demo: supervisor/bench
 	./supervisor/bench demo
 
@@ -72,4 +91,4 @@ clean:
 	-chmod -R u+rwX sessions 2>/dev/null   # snaps are sealed read-only; unseal before removing
 	find sessions -mindepth 1 ! -name .gitkeep ! -name OWNER_TOKEN -exec rm -rf {} +   # clean does not disarm
 
-.PHONY: all test perf demo e2e clean
+.PHONY: all test test-rom perf env ledger-test demo e2e clean

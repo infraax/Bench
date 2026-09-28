@@ -1,8 +1,8 @@
 #!/bin/sh
 # Re-fetch the 22 audited harness repos at the exact commits that were read on 2026-09-28.
-# Clones land in research/clones/ (gitignored). Shallow, one commit each (~2.8 GB for all).
-#   sh research/fetch.sh              # all repos
-#   sh research/fetch.sh codex pi     # only names containing these words
+# Clones land in docs/research/clones/ (gitignored). Shallow, one commit each (~2.8 GB for all).
+#   sh docs/research/fetch.sh              # all repos
+#   sh docs/research/fetch.sh codex pi     # only names containing these words
 set -eu
 here=$(cd "$(dirname "$0")" && pwd)
 dest="$here/clones"

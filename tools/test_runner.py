@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
 """Ring 0 muscle. runs tests/rom (or named files there). one line on stdout: GREEN or RED.
 
 refuses anything that is not is_ring0 before running a single test.

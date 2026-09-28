@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: MIT OR Apache-2.0 */
 /* arm.c — the owner's token, v0: a file the owner made. a later hardware key replaces this file. */
 #define _POSIX_C_SOURCE 200809L
 #include <errno.h>
