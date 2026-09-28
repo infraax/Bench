@@ -31,6 +31,8 @@ DIRTY_MODS = {
     "openai", "anthropic", "httpx", "requests", "urllib", "socket",
     "aiohttp", "http", "ssl", "websockets", "grpc", "smtplib", "ftplib", "telnetlib",
     "asyncio", "socketserver", "xmlrpc", "poplib", "imaplib", "nntplib", "webbrowser",
+    # the builtins module is eval/exec/__import__ by another name
+    "builtins",
     # ambient authority: spawn, native, dynamic, bytecode, second interpreter
     "subprocess", "multiprocessing", "ctypes", "cffi", "pty", "pexpect",
     "importlib", "imp", "runpy", "marshal", "code", "codeop", "pickle", "shelve",
@@ -61,8 +63,11 @@ DIRTY_DUNDER = {
 def _dirty_node(n: ast.AST) -> bool:
     if isinstance(n, ast.Import):
         return any(a.name.split(".")[0] in DIRTY_MODS for a in n.names)
-    if isinstance(n, ast.ImportFrom) and n.module:
-        return n.module.split(".")[0] in DIRTY_MODS
+    if isinstance(n, ast.ImportFrom):
+        # `from os import system` reaches the same door as `os.system`: judge the names too
+        if n.module and n.module.split(".")[0] in DIRTY_MODS:
+            return True
+        return any(a.name in DIRTY_ATTR or a.name in DIRTY_CALL for a in n.names)
     if isinstance(n, ast.Attribute) and n.attr in DIRTY_ATTR:
         return True
     if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id in DIRTY_CALL:

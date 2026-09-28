@@ -38,6 +38,12 @@ DIRTY = [
     "import marshal\n",
     "import code\ncode.interact()\n",
     "import pty\n",
+    # the same doors by from-import or through builtins (found by the 2026-09-28 audit)
+    "from os import system\nsystem('id')\n",
+    "from os import popen as p\np('id')\n",
+    "from os import posix_spawn\n",
+    "from builtins import eval as e\ne('1')\n",
+    "import builtins\nbuiltins.eval('1')\n",
     # string-smuggled names and escape-chain dunders
     "x = eval('1 + 1')\n",
     "m = __import__('socket')\n",
