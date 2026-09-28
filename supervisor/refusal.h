@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: MIT OR Apache-2.0 */
 /* refusal.h — every refusal bench emits has a stable rule id and a one-line fix.
  *
  * the id travels as evidence (`rule=<id>`, key=value, in the MANIFEST); the fix is printed

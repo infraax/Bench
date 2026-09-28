@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
 """talk to the head. read-only.
 
 decodes the lamp byte in sessions/<current>/STATE using the bits in supervisor/woz_bus.h.

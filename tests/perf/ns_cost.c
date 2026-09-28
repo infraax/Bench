@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: MIT OR Apache-2.0 */
 /* ns_cost.c — per-child start-up cost of the tool jail. built and run by `make perf`.
  * in a scratch world (cwd), times fork -> [setup] -> exec, wait, for:
  *   bare   no jail

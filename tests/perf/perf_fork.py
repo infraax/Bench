@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
 """Measurement, not a test of meaning: what a fork costs, and what N parallel worlds buy.
 
 Run by `make perf` (a human), never by ROM. Prints one line per number and fails (exit 1) if

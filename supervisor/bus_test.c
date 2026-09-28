@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: MIT OR Apache-2.0 */
 /* bus_test.c — every lamp byte, every bit, every plug byte, every pull. no fixtures, no clock.
  * make test runs this before the python suites. exit 0 or it prints the first bad board. */
 #include <stdio.h>

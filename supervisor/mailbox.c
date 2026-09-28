@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: MIT OR Apache-2.0 */
 /* mailbox.c — start the helper and talk to it. unix socket, this machine only, no opcode.
  *
  * order matters: bench binds, listens and connects BEFORE the helper exists, so the first

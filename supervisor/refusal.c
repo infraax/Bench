@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: MIT OR Apache-2.0 */
 /* refusal.c — the one table of rule id -> fix. mirrored in tests/rom/test_refusals.py.
  * ids are stable: renaming one is a ROM change. a fix says what to do instead, in one line. */
 #define _POSIX_C_SOURCE 200809L

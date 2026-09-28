@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: MIT OR Apache-2.0 */
 /* woz_bus.h
  *
  * slot 4 is 4. lamps are one byte. talk to the head.

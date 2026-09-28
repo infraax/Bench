@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: MIT OR Apache-2.0 */
 /* main.c — bench: run | kill | demo | snap-ls | status | restore | verify | fork | rules
  *
  * the fixture intern is a text file of opcodes. one op per frame.

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
 """Ring 0: the opcode truth table. ROM owns the rows; the harness runs each through the C parser.
 
 row = (script line, expected). expected is "ok" (the op runs, exit 0) or a phrase the refusal

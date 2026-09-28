@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
 """Timing classes for docs/PERF_AND_MAP.md. A measurement, not a test of meaning.
 
 Run by hand (`python3 tests/perf/perf_map.py [N]`), never by ROM. Every class is sampled N times

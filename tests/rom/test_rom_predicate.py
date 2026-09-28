@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
 """Ring 0: the metal detector. a draft that phones a ghost is not ROM."""
 import sys
 import tempfile

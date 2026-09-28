@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
 """Ring 0: the owner arms a session. the intern's WRITE rule cannot reach the token."""
 import sys
 import unittest

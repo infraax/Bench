@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
 """Line counts per audited repo, split into source and test lines. Same method as the 2026-09-28 audit.
 
     python3 research/loc.py [clones_dir]      # default: research/clones, plus this repo as "Bench"

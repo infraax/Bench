@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
 """Ring 0 is dead code.
 
 3.0 may midwife a test. 1.0 crowns. this file is the midwife's metal detector:

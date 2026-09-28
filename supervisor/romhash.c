@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: MIT OR Apache-2.0 */
 /* romhash.c — build tool. prints the tree hash of tests/rom for the given root
  * (default "."). the Makefile bakes this into supervisor/rom_hash.h, and the
  * supervisor recomputes it at boot with the same tree_hash. change a rom file,

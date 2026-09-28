@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
 """The harness. NOT Ring 0 — make launches it, a human's privilege, not ROM python.
 
 Woz's one gate: the supervisor is started by `make test` (you), never by a ROM file
