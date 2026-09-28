@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+# GitHub Pages, deployed from the default branch's /docs folder (see github.md).
+# Plain GitHub Pages Jekyll: no custom JS, no diagram package. Mermaid blocks render on github.com;
+# on this site they show as source (index.md links to the github.com view).
+title: Bench
+description: A custody kernel for agent work — five verbs, framed steps, sealed snapshots. Not an agent.
+theme: jekyll-theme-minimal
+# archival material stays readable on github.com; it is not site content (and holds text Liquid
+# would rewrite).
+exclude:
+  - history/
+  - research/
