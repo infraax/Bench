@@ -1,0 +1,47 @@
+---
+title: Measure
+nav: measure
+permalink: /measure/
+wide: true
+description: What each class of work costs on one machine — medians and p95, from PERF_AND_MAP.md.
+---
+<h1>Measure</h1>
+<p class="board__line">What a step costs, measured on one machine.</p>
+
+<p>Every number here is copied from <a href="{{ site.repo }}/blob/HEAD/docs/PERF_AND_MAP.md">PERF_AND_MAP.md</a>
+and reproducible with <code>python3 tests/perf/perf_map.py 20</code> and <code>make perf</code>.
+<span class="mute">{{ site.data.perf.machine }}.</span></p>
+
+<p class="legend" aria-hidden="true"><span><i></i>median</span><span><i class="p95"></i>p95</span></p>
+
+{% for g in site.data.perf.groups %}
+<section class="chart" aria-labelledby="g{{ forloop.index }}">
+  <h3 id="g{{ forloop.index }}">{{ g.title }}</h3>
+  <p class="chart__note">{{ g.note }}</p>
+  <ul class="bars">
+    {% for r in g.rows %}
+    {% assign w = r.median | times: 100.0 | divided_by: g.max %}
+    <li class="bar-row">
+      <span class="bar-row__label">{{ r.label }}{% if r.note %}<small class="mute">{{ r.note }}</small>{% endif %}</span>
+      <span class="bar-track" role="img" aria-label="{{ r.label }}: median {% if r.text %}{{ r.text }}{% else %}{{ r.median }}{% endif %} {{ g.unit }}{% if r.p95 %}, p95 {{ r.p95 }} {{ g.unit }}{% endif %}">
+        <span class="bar-fill" style="width: {{ w | round: 1 }}%"></span>
+        {% if r.p95 %}{% assign p = r.p95 | times: 100.0 | divided_by: g.max %}<span class="bar-p95" style="left: {{ p | round: 1 }}%"></span>{% endif %}
+        <span class="bar-val">{% if r.text %}{{ r.text }}{% else %}{{ r.median }}{% endif %} {{ g.unit }}</span>
+      </span>
+    </li>
+    {% endfor %}
+  </ul>
+</section>
+{% endfor %}
+
+<h2>Reading it</h2>
+<ul>
+  <li><strong>The frame clock is not the bottleneck.</strong> <code>T_frame</code> is 200 ms; the worst
+  steady frame measured (1000 unchanged files in <code>hold/</code>) is about 42 ms.</li>
+  <li><strong>Python boot is the unit of cost.</strong> An EXEC is ~32 ms of worker time, of which the
+  jail is about 1 ms.</li>
+  <li><strong>Parallel means worlds.</strong> <code>bench fork</code> makes a new world in ~5.5 ms; four
+  worlds run 3.6× faster side by side than one after another.</li>
+</ul>
+<p class="caption">One machine, one day. Noise between runs is real (the empty frame ranged 0.6–2.7 ms
+across two worlds). Re-measure before quoting.</p>
