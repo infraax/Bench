@@ -71,6 +71,12 @@ test-rom: supervisor/bus_test
 		$(PY) -m unittest discover -s tests/rom -p 'test_*.py' -q; \
 	fi
 
+# the site cannot drift from the tree: rule/ops data regenerated from refusal.c + the ROM ops table,
+# and the playground's parser mirror checked against every OPS_TABLE row (needs node).
+site-check:
+	@$(PY) scripts/site-data.py --check
+	@node tests/site/parity.mjs
+
 demo: supervisor/bench
 	./supervisor/bench demo
 
@@ -91,4 +97,4 @@ clean:
 	-chmod -R u+rwX sessions 2>/dev/null   # snaps are sealed read-only; unseal before removing
 	find sessions -mindepth 1 ! -name .gitkeep ! -name OWNER_TOKEN -exec rm -rf {} +   # clean does not disarm
 
-.PHONY: all test test-rom perf env ledger-test demo e2e clean
+.PHONY: all test test-rom site-check perf env ledger-test demo e2e clean
