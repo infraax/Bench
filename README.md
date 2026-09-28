@@ -38,6 +38,7 @@ make e2e                                  # fixture intern -> frames -> snaps ->
 ./supervisor/bench kill | demo | snap-ls
 ./supervisor/bench restore snap-<k> | <session>/snap-<k>
 ./supervisor/bench verify [snap-<k> | <session>/snap-<k>]   # content-hash integrity check
+./supervisor/bench rules                  # the refusal table: rule id -> one-line fix
 ```
 
 Exit codes: 0 ok · 1 fault · 2 usage · 3 killed · 4 ROM changed · 5 not armed / disarmed ·
@@ -51,6 +52,21 @@ Exit codes: 0 ok · 1 fault · 2 usage · 3 killed · 4 ROM changed · 5 not arm
 
 Status words: `run`, `ok`, `fault`, `halt`, `disarmed`, `restored`, and `crashed` (STATE says `run`
 but nobody holds the world lock).
+
+## Refusals
+
+Every rejection names a stable rule and a fix, so a model driving the intern can act on it:
+
+```
+FAULT line 2: ring: intern writes hold/ or proposed/ only, not main/x
+  rule=write-ring fix: write under hold/ or proposed/; main/ is Ring 0
+```
+
+Parse faults (before any frame) print the rule on the next line. A refused step also carries
+`rule=<id>` in its evidence line, so its MANIFEST records it; a gate stop (no step, no snap) prints
+it the same way. The table is `supervisor/refusal.c`, mirrored in ROM by `tests/rom/test_refusals.py`
+(which also names the rule for every refusal row of `OPS_TABLE`); the harness checks `bench rules`
+against the mirror.
 
 ## Session arm (owner token, v0)
 

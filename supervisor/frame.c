@@ -491,7 +491,7 @@ int frame(Session *s, Op op, Tool tool, void *arg, int k_due) {
         if (g > 0) return g;
     }
     Board pre, post;
-    if (op == OP_TEST && board_read(s, &pre) != 0) return fault(s, "fault=board-unreadable");
+    if (op == OP_TEST && board_read(s, &pre) != 0) return fault(s, "fault=board-unreadable rule=internal");
     uint64_t gate_ns = nowns() - g0;   /* gate + pre-step board read: the C thread's own work */
     int rc = 0;
     const char *skip = NULL;
@@ -515,7 +515,7 @@ int frame(Session *s, Op op, Tool tool, void *arg, int k_due) {
             if (ml) moved[ml - 1] = 0;
         }
         if (moved[0]) {
-            snprintf(s->ev, sizeof s->ev, "fault=test-postcondition moved=%s", moved);
+            snprintf(s->ev, sizeof s->ev, "fault=test-postcondition moved=%s rule=test-moved", moved);
             if (strstr(moved, "token")) quarantine_token(s);
             s->tainted = 1;
             skip = "tainted";
@@ -527,15 +527,15 @@ int frame(Session *s, Op op, Tool tool, void *arg, int k_due) {
     if (rc == 0 && !skip) {
         uint64_t hb, hf;
         if (hold_count(s, &hb, &hf) != 0) {
-            snprintf(s->ev, sizeof s->ev, "fault=hold-unreadable");
+            snprintf(s->ev, sizeof s->ev, "fault=hold-unreadable rule=internal");
             rc = 1;
         } else if (hb > s->hold_base && hb - s->hold_base > s->hold_quota) {
-            snprintf(s->ev, sizeof s->ev, "fault=hold-quota-bytes grew=%llu quota=%llu",
+            snprintf(s->ev, sizeof s->ev, "fault=hold-quota-bytes grew=%llu quota=%llu rule=hold-bytes",
                      (unsigned long long)(hb - s->hold_base), (unsigned long long)s->hold_quota);
             rc = 1;
             skip = "over-quota";
         } else if (hf > s->hold_base_files && hf - s->hold_base_files > s->hold_files_quota) {
-            snprintf(s->ev, sizeof s->ev, "fault=hold-quota-files grew=%llu quota=%llu",
+            snprintf(s->ev, sizeof s->ev, "fault=hold-quota-files grew=%llu quota=%llu rule=hold-files",
                      (unsigned long long)(hf - s->hold_base_files), (unsigned long long)s->hold_files_quota);
             rc = 1;
             skip = "over-quota";
@@ -548,18 +548,18 @@ int frame(Session *s, Op op, Tool tool, void *arg, int k_due) {
     if (snap_board(s, "step", skip) != 0) {
         /* no snapshot, no step. worst-case: n does not advance on a missed frame. */
         s->n--;
-        return fault(s, "fault=snap n=%u", s->n);
+        return fault(s, "fault=snap n=%u rule=internal", s->n);
     }
 
     /* then inhibit */
     if (rc != 0) { s->bus.lamps = lamp_set(s->bus.lamps, LAMP_HOLD); return -1; }
     uint64_t c_ms = (nowns() - c0) / 1000000ull, t_ms = (nowns() - s->t0_ns) / 1000000ull;
     if (c_ms > s->t_step_ms)
-        return fault(s, "fault=T_frame ms=%llu>%u", (unsigned long long)c_ms, s->t_step_ms);
+        return fault(s, "fault=T_frame ms=%llu>%u rule=t-frame", (unsigned long long)c_ms, s->t_step_ms);
     if (t_ms > s->t_sess_ms)
-        return fault(s, "fault=T_session ms=%llu>%u", (unsigned long long)t_ms, s->t_sess_ms);
-    if (s->n > s->n_max) return fault(s, "fault=over-N n=%u>%u", s->n, s->n_max);
-    if (k_due && snap(s, "K") != 0) return fault(s, "fault=snap-K n=%u", s->n);
+        return fault(s, "fault=T_session ms=%llu>%u rule=t-session", (unsigned long long)t_ms, s->t_sess_ms);
+    if (s->n > s->n_max) return fault(s, "fault=over-N n=%u>%u rule=over-n", s->n, s->n_max);
+    if (k_due && snap(s, "K") != 0) return fault(s, "fault=snap-K n=%u rule=internal", s->n);
     (void)op;
     return 0;
 }

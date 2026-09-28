@@ -2,9 +2,9 @@ CC     ?= cc
 CFLAGS ?= -std=c11 -Wall -Wextra -Werror -O2
 PY     ?= python3
 BENCH_SRC = supervisor/main.c supervisor/frame.c supervisor/sha256.c supervisor/sandbox.c \
-            supervisor/arm.c supervisor/mailbox.c
+            supervisor/arm.c supervisor/mailbox.c supervisor/refusal.c
 HDR       = supervisor/frame.h supervisor/woz_bus.h supervisor/sha256.h supervisor/sandbox.h \
-            supervisor/arm.h supervisor/mailbox.h
+            supervisor/arm.h supervisor/mailbox.h supervisor/refusal.h
 ROMH      = supervisor/rom_hash.h
 ROM_FILES = $(wildcard tests/rom/*.py)
 E2E       = sessions/e2e

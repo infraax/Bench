@@ -284,6 +284,7 @@ class TestBoard(unittest.TestCase):
         out, _ = proc.communicate(timeout=15)
         self.assertEqual(proc.returncode, 5, out)
         self.assertIn("disarmed", out)
+        self.assertIn("  rule=disarmed fix: ", out)   # a gate stop names its rule too
         self.assertEqual(w.state()["status"], "disarmed")
         self.assertLess(int(w.state()["n"]), 6)
         self.assertNotIn("MAIN", out)
@@ -901,6 +902,55 @@ class TestOpsTable(unittest.TestCase):
                     self.assertNotEqual(r.returncode, 0, r.stdout)
                     self.assertIn(expect, r.stdout)
                 self.assertNotIn(" MAIN", r.stdout)
+
+
+class TestRefusals(unittest.TestCase):
+    """every refusal prints rule=<id> and its fix; the C table is the ROM table."""
+
+    @classmethod
+    def setUpClass(cls):
+        sys.path.insert(0, str(IMAGE / "tests" / "rom"))
+        from test_refusals import OPS_RULES, RULES
+        cls.OPS_RULES, cls.RULES = OPS_RULES, RULES
+
+    def test_c_table_is_the_rom_table(self):
+        w = addWorld(self)
+        r = w.bench("rules")
+        self.assertEqual(r.returncode, 0, r.stdout)
+        got = {}
+        for line in r.stdout.splitlines():
+            m = re.fullmatch(r"rule=(\S+) fix: (.+)", line)
+            self.assertIsNotNone(m, line)
+            self.assertNotIn(m.group(1), got)
+            got[m.group(1)] = m.group(2)
+        self.assertEqual(got, self.RULES)
+
+    def test_every_refusal_row_prints_its_rule_and_fix(self):
+        w = addWorld(self)
+        for i, (line, rid) in enumerate(self.OPS_RULES.items()):
+            with self.subTest(line=line):
+                r = w.bench("run", w.script(line + "\n", name=f"ref{i}.ops"))
+                self.assertNotEqual(r.returncode, 0, r.stdout)
+                self.assertIn(f"  rule={rid} fix: {self.RULES[rid]}\n", r.stdout)
+
+    def test_parse_fault_names_rule_on_the_next_line(self):
+        w = addWorld(self)
+        r = w.bench("run", w.script("WRITE fs hold/a ok\nWRITE fs main/x hi\n"))
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("FAULT line 2: ring: intern writes hold/ or proposed/ only, not main/x\n"
+                      "  rule=write-ring fix: write under hold/ or proposed/; main/ is Ring 0\n", r.stdout)
+
+    def test_manifest_of_a_refused_step_carries_the_rule(self):
+        w = addWorld(self)
+        for i, (line, rid) in enumerate([("READ fb main/hello.txt", "slot-pulled"),
+                                         ("TEST JUDGE tests/rom/test_isa.py", "judge-pulled"),
+                                         ("WAIT 6000", "t-tool")]):
+            with self.subTest(line=line):
+                r = w.bench("run", w.script(line + "\n", name=f"man{i}.ops"))
+                self.assertEqual(r.returncode, 1, r.stdout)
+                man = (w.snaps()[-1] / "MANIFEST").read_text()
+                ev = next(x for x in man.splitlines() if x.startswith("evidence="))
+                self.assertIn(f" rule={rid}", ev)
 
 
 class TestRetention(unittest.TestCase):
