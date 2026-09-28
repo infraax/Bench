@@ -112,23 +112,27 @@ static int cmp_str(const void *a, const void *b) {
     return strcmp(*(char *const *)a, *(char *const *)b);
 }
 
-static int walk(const char *abs, const char *rel, List *l) {
+/* skip_derived: __pycache__ and *.pyc are the owner's python's by-products in main/ and
+   tests/rom/, not board state. hold/ is the intern's: nothing in it is derived, so nothing in
+   it is skipped, or a tool could park bytes in hold/x.pyc/ that no tree= or board= covers
+   (found by tests/deep/hash_fuzz.py). */
+static int walk(const char *abs, const char *rel, List *l, int skip_derived) {
     DIR *d = opendir(abs);
     if (!d) return -1;
     int rc = 0;
     struct dirent *e;
     while (rc == 0 && (e = readdir(d)) != NULL) {
         if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, "..")) continue;
-        if (!strcmp(e->d_name, "__pycache__")) continue;   /* bytecode is derived, not board state */
         size_t nlen = strlen(e->d_name);
-        if (nlen >= 4 && !strcmp(e->d_name + nlen - 4, ".pyc")) continue;
+        if (skip_derived && (!strcmp(e->d_name, "__pycache__") || (nlen >= 4 && !strcmp(e->d_name + nlen - 4, ".pyc"))))
+            continue;
         char a2[2048], r2[2048];
         struct stat st;
         if (join(a2, sizeof a2, abs, e->d_name) || join(r2, sizeof r2, rel, e->d_name)) { rc = -1; break; }
         if (lstat(a2, &st) != 0) { rc = -1; break; }
         if (S_ISLNK(st.st_mode)) continue;        /* a symlink is not board state */
         if (S_ISREG(st.st_mode)) rc = list_push(l, r2);
-        else if (S_ISDIR(st.st_mode)) rc = walk(a2, r2, l);
+        else if (S_ISDIR(st.st_mode)) rc = walk(a2, r2, l, skip_derived);
     }
     closedir(d);
     return rc;
@@ -189,7 +193,8 @@ int tree_hash_roots(const char *const *roots, const char *const *paths, int npat
         }
         if (!S_ISDIR(st.st_mode)) continue;
         List l = {0};
-        if (walk(abs, paths[i], &l) != 0) { for (size_t j=0;j<l.n;j++) free(l.v[j]); free(l.v); return -1; }
+        int hold = !strcmp(paths[i], "hold") || !strncmp(paths[i], "hold/", 5);
+        if (walk(abs, paths[i], &l, !hold) != 0) { for (size_t j=0;j<l.n;j++) free(l.v[j]); free(l.v); return -1; }
         if (l.n) qsort(l.v, l.n, sizeof *l.v, cmp_str);   /* empty dir: v is NULL, qsort(NULL) is UB */
         int rc = 0;
         for (size_t j = 0; j < l.n && rc == 0; j++) {

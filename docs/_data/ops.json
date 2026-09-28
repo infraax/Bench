@@ -238,5 +238,10 @@
   "line": "WAIT \u000b2",
   "expect": "not a number",
   "rule": "wait-shape"
+ },
+ {
+  "line": "WAIT 1\r\rjunk",
+  "expect": "ok",
+  "rule": null
  }
 ]

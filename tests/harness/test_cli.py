@@ -772,6 +772,26 @@ class TestVerify(unittest.TestCase):
         m = re.search(r"^board=([0-9a-f]{64})$", man, re.M)
         self.assertIsNotNone(m, man)
 
+    def test_bytes_parked_under_a_pyc_name_in_hold_are_evidence(self):
+        # hold/ is the intern's: a *.pyc dir or __pycache__ there is not derived bytecode, it is
+        # data, and verify must see a change to it (found by tests/deep/hash_fuzz.py)
+        w = addWorld(self)
+        prog = w.tool("park.py", "import os\nos.makedirs('hold/c.pyc', exist_ok=True)\n"
+                                 "open('hold/c.pyc/payload', 'w').write('parked')\n"
+                                 "os.makedirs('hold/__pycache__', exist_ok=True)\n"
+                                 "open('hold/__pycache__/m.pyc', 'w').write('also')\n")
+        r = w.bench("run", w.script(f"EXEC {prog}\n"))
+        self.assertEqual(r.returncode, 0, r.stdout)
+        snap = w.snaps()[-1]
+        self.assertEqual(w.bench("verify").returncode, 0)
+        for rel in ("c.pyc/payload", "__pycache__/m.pyc"):
+            with self.subTest(rel=rel):
+                self.unseal_edit(snap / "hold" / rel, "swapped")
+                r = w.bench("verify")
+                self.assertNotEqual(r.returncode, 0, r.stdout)
+                self.assertIn("MISMATCH", r.stdout)
+                self.unseal_edit(snap / "hold" / rel, "parked" if rel.startswith("c.") else "also")
+
     def test_clean_session_verifies(self):
         w = self.run3()
         r = w.bench("verify")
@@ -1024,6 +1044,66 @@ class TestCheck(unittest.TestCase):
         w = addWorld(self)
         self.assertIn("stop line=3 rule=over-n", self.check(w, "WAIT 1\n" * 3, "--n", "2").stdout)
         self.assertEqual(self.check(w, "WAIT 1\n", "--n", "0").returncode, 2)
+
+
+class TestParseEdges(unittest.TestCase):
+    """the boundaries mutation testing (tests/deep/mutate.py --lang c) found unpinned: every
+    limit is tested on both sides, through check and, where it matters, through run."""
+
+    EDGES = [
+        # (script text, verdict of its only line: ok / rule)
+        ("WAIT 0\n", "ok"), ("WAIT 9\n", "ok"), ("WAIT +0\n", "ok"), ("WAIT +9\n", "ok"),
+        ("WAIT 5000\n", "ok"), ("WAIT 5001\n", "t-tool"), ("WAIT 3600000\n", "t-tool"),
+        ("WAIT 3600001\n", "wait-shape"), ("WAIT +\n", "wait-shape"), ("WAIT +a\n", "wait-shape"),
+        ("WAIT 1a\n", "wait-shape"), ("WAIT /\n", "wait-shape"), ("WAIT :\n", "wait-shape"),
+        ("WAIT ++1\n", "wait-shape"),
+        ("  \tWAIT 1\n", "ok"), ("\t# a comment\n", "ok"),
+        ("WAIT 1", "ok"),                                    # no newline at the end of the file
+        ("EXEC tools/hash.py" + " a" * 16 + "\n", "ok"), ("EXEC tools/hash.py" + " a" * 17 + "\n", "exec-argc"),
+        ("WRITE fs hold/" + "a" * 250 + " x\n", "ok"), ("WRITE fs hold/" + "a" * 251 + " x\n", "field-long"),
+    ]
+
+    def check(self, w, text):
+        return subprocess.run([str(BENCH), "check", "-"], cwd=IMAGE, env=w.env, input=text,
+                              stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=30)
+
+    def test_every_edge_through_check(self):
+        w = addWorld(self)
+        for text, want in self.EDGES:
+            with self.subTest(text=text[:40]):
+                out = self.check(w, text).stdout
+                got = re.search(r"^stop line=\d+ rule=(\S+)$", out, re.M)
+                self.assertEqual(got.group(1) if got else "ok", want, out)
+
+    def test_line_length_both_sides(self):
+        w = addWorld(self)
+        for n, want in ((510, "ok"), (511, "line-long"), (512, "line-long")):
+            with self.subTest(bytes=n):
+                line = "# " + "x" * (n - 2)
+                self.assertEqual(len(line), n)
+                out = self.check(w, line + "\nWAIT 1\n").stdout
+                self.assertIn("rule=line-long" if want != "ok" else "line 1 blank", out)
+                self.assertIn("line 2 ok WAIT", out)          # the next line is its own line
+                r = w.bench("run", w.script(line + "\nWAIT 1\n", name=f"len{n}.ops"))
+                self.assertEqual(r.returncode, 0 if want == "ok" else 1, r.stdout)
+
+    def test_blank_and_comment_lines_are_not_frames(self):
+        w = addWorld(self)
+        text = "WAIT 1\n\n   \n# chat\n\t# chat\nWAIT 1"
+        self.assertIn("check ops=2 frames=2 exit=0", self.check(w, text).stdout)
+        r = w.bench("run", w.script(text, name="blank.ops"))
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertEqual(len(re.findall(r"^frame \d+", r.stdout, re.M)), 2)
+
+    def test_ops_record_is_the_canonical_form(self):
+        # OPS is what replay will re-run: each op in canonical form, nothing left over from the
+        # parse buffer (a READ carries no payload, a WAIT no path)
+        w = addWorld(self)
+        text = "read\tfs   main/hello.txt\nWAIT +7\nwrite fs hold/o.txt  two  words \nEXEC tools/hash.py   hold/o.txt\n"
+        self.assertEqual(w.bench("run", w.script(text, name="canon.ops")).returncode, 0)
+        ops = (w.session() / "OPS").read_text().splitlines()
+        self.assertEqual(ops, ["READ fs main/hello.txt", "WAIT 7", "WRITE fs hold/o.txt two  words",
+                               "EXEC tools/hash.py hold/o.txt"])
 
 
 class TestStats(unittest.TestCase):

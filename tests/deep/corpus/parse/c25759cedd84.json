@@ -1,0 +1,5 @@
+{
+ "line": "WAIT \u000b2",
+ "why": "strtoul skipped a leading \\v: C ran 'WAIT \\v2' as WAIT 2 until it was made strict",
+ "found": "2026-09-28 fuzz_parse.py"
+}

@@ -1,0 +1,5 @@
+{
+ "line": "TE\u017fT Pure t",
+ "why": "Unicode case folding: String.toUpperCase maps U+017F/U+0131 to ASCII; strcasecmp does not",
+ "found": "2026-09-28 fuzz_parse.py"
+}

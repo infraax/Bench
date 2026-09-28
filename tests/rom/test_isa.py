@@ -74,6 +74,11 @@ class TestISA(unittest.TestCase):
         self.assertIsNone(hook(s, frozenset({"fs"}), radio=False))
         self.assertIs(hook(s, frozenset({"fs", "fb"}), radio=False), s)
 
+    def test_hook_passes_a_supervisor_term_unchanged(self):
+        # ring-gated at birth: hook neither denies nor rewrites it, whatever is plugged
+        s = Step(Op.KILL, "", "", None, Ring.ROM)
+        self.assertIs(hook(s, frozenset(), radio=False), s)
+
     def test_hook_plugged_passes_same_term(self):
         s = Step(Op.READ, "fs", "main/x", None, Ring.WORK)
         self.assertIs(hook(s, frozenset({"fs"}), radio=False), s)

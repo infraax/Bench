@@ -1,0 +1,5 @@
+{
+ "line": "WAIT 1\u0000x",
+ "why": "a NUL byte: fgets-based reading called it line-long and check swallowed the next line",
+ "found": "2026-09-28 fuzz_parse.py"
+}

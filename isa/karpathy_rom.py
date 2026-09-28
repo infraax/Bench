@@ -80,6 +80,10 @@ def _dirty_node(n: ast.AST) -> bool:
     # escape-chain dunder reach: ().__class__.__bases__, x.__globals__, obj.__builtins__.
     if isinstance(n, ast.Attribute) and n.attr in DIRTY_DUNDER:
         return True
+    # a door named without a call is still a door: f = eval; [exec][0](...); __builtins__[...]
+    # (found by tests/deep/mutate.py's survivors, 2026-09-28)
+    if isinstance(n, ast.Name) and (n.id in DIRTY_CALL or n.id in DIRTY_DUNDER):
+        return True
     return False
 
 def is_ring0(src: str) -> bool:

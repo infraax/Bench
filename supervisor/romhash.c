@@ -11,10 +11,11 @@
 
 int main(int argc, char **argv) {
     const char *root = argc > 1 ? argv[1] : ".";
-    const char *paths[] = {"tests/rom"};
+    /* a second argument names another tree under root (tests/deep/hash_fuzz.py uses "hold") */
+    const char *paths[] = {argc > 2 ? argv[2] : "tests/rom"};
     char hex[65];
     if (tree_hash(root, paths, 1, hex) != 0) {
-        fprintf(stderr, "romhash: cannot hash %s/tests/rom\n", root);
+        fprintf(stderr, "romhash: cannot hash %s/%s\n", root, paths[0]);
         return 1;
     }
     printf("%s\n", hex);

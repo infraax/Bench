@@ -50,6 +50,12 @@ DIRTY = [
     "import os\ng = getattr(os, 'system')\n",
     "leak = ().__class__.__bases__[0].__subclasses__()\n",
     "f = (lambda: 0)\nb = f.__globals__['__builtins__']\n",
+    # a door named, not called (found by tests/deep/mutate.py, 2026-09-28)
+    "f = eval\nf('1')\n",
+    "x = [exec][0]\n",
+    "b = __builtins__['eval']\n",
+    "g = globals\n",
+    "i = __import__\n",
 ]
 
 
@@ -65,6 +71,13 @@ class TestPredicate(unittest.TestCase):
 
     def test_syntax_error_is_not_ring0(self):
         self.assertFalse(is_ring0("def (:\n"))
+
+    def test_midwife_makes_nested_draft_dirs_and_rewrites(self):
+        with tempfile.TemporaryDirectory() as d:
+            dest = Path(d) / "proposed" / "deep" / "er" / "test_x.py"
+            midwife(PURE, dest)
+            midwife(PURE, dest)          # a second draft in the same place is not an error
+            self.assertEqual(dest.read_text(), PURE)
 
     def test_install_rom_refuses_dirty(self):
         with tempfile.TemporaryDirectory() as d:

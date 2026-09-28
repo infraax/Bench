@@ -42,7 +42,9 @@
   /* one line -> {kind: "blank"|"ok"|"parse"|"run", verb, rule, msg} */
   function line(raw) {
     if (raw.indexOf("\u0000") >= 0) return fault("line-nul", "NUL byte in line");
-    var ln = raw.replace(/[\r\n].*$/, "");
+    /* cut at the first CR or LF, like strcspn(ln, "\r\n"). a regex /[\r\n].*$/ does not: "." stops
+       at the next \r, so "WAIT 1\r\rx" kept a \r (found by tests/deep/fuzz_parse.py) */
+    var cut = raw.search(/[\r\n]/), ln = cut < 0 ? raw : raw.slice(0, cut);
     var body = ln.replace(/^[ \t]+/, "");
     if (!body || body[0] === "#") return { kind: "blank" };
     var t = take(body, 1), verb = t.toks[0], rest = t.rest, V = upper(verb);

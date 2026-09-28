@@ -15,12 +15,13 @@ def _skip(name):
     return name == b"__pycache__" or name.endswith(b".pyc")
 
 
-def _walk(abs_dir, rel, out):
-    """regular files under abs_dir as (relpath bytes, abs path); symlinks are not board state."""
+def _walk(abs_dir, rel, out, skip_derived=True):
+    """regular files under abs_dir as (relpath bytes, abs path); symlinks are not board state.
+    hold/ skips nothing: the intern writes it, so nothing in it is derived (sha256.c walk)."""
     with os.scandir(abs_dir) as it:
         for e in it:
             name = os.fsencode(e.name)
-            if _skip(name):
+            if skip_derived and _skip(name):
                 continue
             r = rel + b"/" + name
             if e.is_symlink():
@@ -28,7 +29,7 @@ def _walk(abs_dir, rel, out):
             if e.is_file(follow_symlinks=False):
                 out.append((r, e.path))
             elif e.is_dir(follow_symlinks=False):
-                _walk(e.path, r, out)
+                _walk(e.path, r, out, skip_derived)
 
 
 def tree_hash(paths, base=Path(".")):
@@ -47,7 +48,7 @@ def tree_hash(paths, base=Path(".")):
             files = [(rel, top)]
         elif stat.S_ISDIR(st.st_mode):
             files = []
-            _walk(top, rel, files)
+            _walk(top, rel, files, not (rel == b"hold" or rel.startswith(b"hold/")))
             files.sort(key=lambda x: x[0])
         else:
             continue                                  # a symlink or device at the top is skipped

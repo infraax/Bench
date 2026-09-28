@@ -1,0 +1,5 @@
+{
+ "line": "\r\r",
+ "why": "a second CR: the site mirror's /[\\r\\n].*$/ cut stops at it, strcspn does not",
+ "found": "2026-09-28 fuzz_parse.py (random seed)"
+}

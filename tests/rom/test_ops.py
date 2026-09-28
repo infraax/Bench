@@ -66,6 +66,7 @@ OPS_TABLE = [
     ("WAIT 1\x00", "NUL byte"),                               # fgets saw "line too long"
     ("TE\u017fT PURE tests/rom/test_isa.py", "unknown verb"),  # U+017F upper-cases to S outside C
     ("WAIT \x0b2", "not a number"),                           # strtoul skipped the \v
+    ("WAIT 1\r\rjunk", "ok"),                                 # the line ends at the first CR
 ]
 
 PARSE_REFUSALS = {"unknown verb", "supervisor"}
