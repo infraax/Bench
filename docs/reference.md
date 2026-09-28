@@ -183,8 +183,11 @@ parallel, 3.7×; it fails below 1.5×).
 ## World lock
 
 `run` and `restore` take a POSIX write lock on `sessions/LOCK` (fcntl, so `F_GETLK` names the holder).
-A second one in the same world exits 7 and names the holder's pid. `kill` signals the pid in `PID`
-only if that pid holds the lock; a PID file left by a crash is never signalled. `demo` has its own
+A second one in the same world exits 7 and names the holder's pid. `kill` asks the lock first: the
+pid in `PID` is signalled only if it holds the lock, and a PID file left by a crash is never
+signalled. A lock holder that `PID` does not name (a run still starting, before `CURRENT` names
+it) is signalled directly and halts at its first gate; the previous session is not marked killed.
+Signal handlers are installed before the lock is taken, so that SIGTERM never cuts setup in half. `demo` has its own
 lock, `sessions/DEMO`, and a knife of `T_tool` × ROM test files; `kill` reaches it too.
 
 ## Helper mailbox
@@ -226,6 +229,10 @@ nothing more. Tool children are limited by the C supervisor:
   `PYTHONPATH`; only `LANG`, `LC_*`, `TZ` pass through.
 - **ROM crown**: `run`, `demo` and `restore` exit 4 if `tests/rom` no longer matches the hash baked at build.
 - **timeout**: each `EXEC`/`TEST` child is killed after `T_tool` (5 s).
+- **no worker outlives its frame**: each child leads its own process group; bench is a child
+  subreaper. At frame end the group is killed, then every process re-parented to bench (a
+  double-forked or `setsid` daemon) is killed and reaped, the helper excepted. Evidence says
+  `strays=N` when any were found.
 - **output ceiling**: a child's stdout to `out-<n>` is killed past `OUT_CEIL_BYTES` (1 MiB), so a
   flood cannot fill the disk within `T_tool`.
 
@@ -238,7 +245,7 @@ The supervisor's own file ops are anchored, because it runs as the owner, not la
 
 Known limits: `execve` stays allowed in tool children — a tool can start other programs; they
 inherit the same limits. Tool children share bench's pid space (no PID namespace yet), so a tool can
-signal processes of the same uid. `bench verify` (content hash) stays the guarantee for snapshots;
+signal processes of the same uid while its frame runs (none survive the frame, above). `bench verify` (content hash) stays the guarantee for snapshots;
 the read-only view is the prevention.
 
 Lamps: MAIN and HOLD are never lit together (HOLD wins). BLIND is lit when fb **and** radio are

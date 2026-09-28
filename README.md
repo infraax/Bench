@@ -138,6 +138,7 @@ in foundation). MAIN and HOLD are never lit together.
 - [`docs/compare.md`](docs/compare.md) — where Bench sits among agent harnesses
 - [`docs/TOOLBOX.md`](docs/TOOLBOX.md) · [`docs/EVOLUTION.md`](docs/EVOLUTION.md) · [`docs/DEVELOPMENT_PLAN.md`](docs/DEVELOPMENT_PLAN.md) — tools, roadmap, sprints
 - [`docs/PERF_AND_MAP.md`](docs/PERF_AND_MAP.md) · [`docs/TEST_BUDGET.md`](docs/TEST_BUDGET.md) — measured costs, test time
+- [`docs/AUDIT.md`](docs/AUDIT.md) — last code audit: fixed, open, measured-and-dropped, feature list
 - [`docs/ci.md`](docs/ci.md) — what hosted CI proves and what only the ledger proves
 - [`docs/history/`](docs/history/) — session notes and design reviews
 
