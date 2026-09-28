@@ -2,7 +2,7 @@
 
 Layers, not a brand war. "Agent harness" means different things; compare within a layer.
 Full audit (22 repos pinned by commit, sizes, file:line evidence, the ranked idea list):
-[`history/comparison-2026-09-28.md`](history/comparison-2026-09-28.md) and [`research/`](research/).
+[`history/comparison-2026-09-28.md`](https://github.com/infraax/Bench/blob/HEAD/docs/history/comparison-2026-09-28.md) and [`research/`](https://github.com/infraax/Bench/tree/HEAD/docs/research).
 
 | Layer | Job | Examples (audited 2026-09-28) |
 |---|---|---|
