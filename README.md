@@ -122,8 +122,8 @@ tool wrote). Over quota: the step is snapped without the board (`tree=skipped:ov
 status `fault`, exit 1. Both quotas and baselines are frozen in `SESSION`.
 
 The file default (256) is set against `T_frame`: creating ~1000 **new** files in one step costs
-~350 ms to snap on the test disk, over the 200 ms budget; 256 new files snap well inside it.
-Unchanged files are cheap (see snapshots).
+~60 ms median on the 2026-09-28 machine but its tail reaches the 200 ms budget (430 ms, 1 run of 9);
+256 new files snap in ~15–30 ms. Unchanged files are cheaper (see snapshots).
 
 ## Snapshots
 
@@ -143,7 +143,9 @@ A finished snapshot is **evidence**, protected in two independent layers:
 
 - **By delta**: a file unchanged since the previous board snap — same (ino, size, mtime, ctime) in
   that snap's `INDEX` — is hard-linked from that snap, never from `hold/`. Everything else is copied.
-  1000 unchanged files: ~8 ms instead of ~340 ms. A name containing a newline is always copied.
+  The link/copy part for 1000 unchanged files is a few ms; the whole frame over 1000 unchanged
+  files is ~42 ms, because `tree=` and `board=` still hash every file (`docs/PERF_AND_MAP.md`).
+  A name containing a newline is always copied.
 - **Restore**: `bench restore snap-<k>` (owner, armed, world locked). The snap's `board=` must match,
   then `main/` + the snap's `hold/` must hash to its `tree=` before anything moves. The old `hold/`
   is kept in `sessions/<new>/hold.before`. The new session's s0 is the restored board; status `restored`.

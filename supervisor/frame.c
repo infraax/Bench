@@ -581,7 +581,6 @@ int frame(Session *s, Op op, Tool tool, void *arg, int k_due) {
         return fault(s, "fault=T_session ms=%llu>%u rule=t-session", (unsigned long long)t_ms, s->t_sess_ms);
     if (s->n > s->n_max) return fault(s, "fault=over-N n=%u>%u rule=over-n", s->n, s->n_max);
     if (k_due && snap(s, "K") != 0) return fault(s, "fault=snap-K n=%u rule=internal", s->n);
-    (void)op;
     return 0;
 }
 

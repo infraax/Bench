@@ -480,8 +480,9 @@ static int rom_ok(void) {
  * file, or sessions/OWNER_TOKEN exists under the world root. presence only, no content.
  * the token is checked here, in the supervisor, before any session dir, frame or lamp.
  * the intern cannot mint it: WRITE takes hold/ and proposed/ only, and EXEC children are
- * write-limited to hold/ and proposed/. TEST children are not write-limited; they run ROM
- * code, which a human crowned. stands in for a later hardware key; nothing more.
+ * write-limited to hold/ and proposed/. TEST children have no landlock, but their view holds
+ * sessions/ read-only (sandbox.c), and the frame's post-conditions back that up. stands in for a
+ * later hardware key; nothing more.
  * the helper (bench-helper, over the mailbox) must agree at start (ARM_OK) and before
  * every frame (FRAME_OK). it can refuse; it cannot arm on its own. missing or silent
  * helper = fail closed, exit 6. */

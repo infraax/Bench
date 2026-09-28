@@ -54,6 +54,7 @@ Files that carry state: `sessions/LOCK` (who owns the frame clock), `sessions/CU
 | snap | marginal frame, hold = 1000 × 1 B (unchanged → linked) | 41.8 | 48.7 | 20 |
 | snap | whole 1-step run over 1000 × 1 B (s0 copies all) | 129 | 149 | 20 |
 | snap | 1-step run minus `tool_ms`, tool writes +64 / +256 new files | 19.4 / 29.7 | 22.0 / 40.7 | 20 |
+| snap | same, +1000 new files (`--hold-files 2000`) | 62 | 430 (1 of 9 tripped `T_frame`) | 9 |
 | fork world | `bench fork` wall incl. process start (`make perf`) | 5.5 | — | 5 |
 | fork world | 4 worlds × 5-op script: sequential → parallel (s) | 1.36 → 0.38 (3.6×) | — | 1 |
 | ROM suite | `unittest discover tests/rom` wall (python boot + 55 tests; in-process 0.02 s) | 80 | 135 | 20 |
@@ -63,8 +64,10 @@ Reading it:
 
 - **The frame clock is not the bottleneck.** `T_frame` is 200 ms; the worst steady frame measured
   (1000 unchanged files) is 42 ms. A step that creates 256 new files adds ~15 ms of copy over a
-  session start. The file quota (256) is far from the clock; `T_frame` does not die on file count
-  at the default quota, so no snap work is justified by these numbers (§2 item 6: not done).
+  session start. At 1000 new files the median is 62 ms but the tail reaches the clock (1 of 9
+  runs: 430 ms, `fault=T_frame rule=t-frame`, whose fix already says "write fewer new files per
+  step"). The default file quota (256) keeps a step well inside `T_frame`; no snap work is
+  justified by these numbers (§2 item 6: not done).
 - **Frame cost scales with the size of hold/, not with the step.** Unchanged files are linked, but
   every frame still hashes all of `main/`+`hold/` for `tree=` and the snap's `hold/` for `board=`:
   ~40 µs per file. The README's "1000 unchanged files: ~8 ms" is the copy/link part only; the frame
