@@ -69,27 +69,34 @@ extern char **environ;
 
 int child_run(const char *root, char *const argv[], Jail jail, char *out, size_t outsz,
               uint64_t *nbytes, uint32_t timeout_ms, uint64_t out_max, int log_fd, int err_fd) {
-    int p[2];
+    int p[2], sp[2];
     if (pipe(p) != 0) return -1;
+    /* status pipe, CLOEXEC: the child writes one byte only if it fails before exec (chdir, jail,
+       exec). a successful exec closes it unwritten. so "the worker never started" is never
+       mistaken for a tool that chose to exit 125/126/127. */
+    if (pipe2(sp, O_CLOEXEC) != 0) { close(p[0]); close(p[1]); return -1; }
     pid_t pid = fork();
-    if (pid < 0) { close(p[0]); close(p[1]); return -1; }
+    if (pid < 0) { close(p[0]); close(p[1]); close(sp[0]); close(sp[1]); return -1; }
     if (pid == 0) {
+        close(sp[0]);
         int nul = open("/dev/null", O_RDONLY);
         if (nul >= 0) { dup2(nul, 0); close(nul); }
         dup2(p[1], 1);
         close(p[0]); close(p[1]);
         if (err_fd >= 0) dup2(err_fd, 2);
-        if (chdir(root) != 0) _exit(126);
+        if (chdir(root) != 0) { if (write(sp[1], "c", 1)) {} _exit(126); }
         /* drop authority, fail closed: a child that cannot be jailed does not run. */
         char **env = tool_env();
-        if (!env || sandbox_apply(jail) != 0) _exit(125);
+        if (!env || sandbox_apply(jail) != 0) { if (write(sp[1], "j", 1)) {} _exit(125); }
         /* the search for argv[0] uses the worker's fixed PATH, not bench's: glibc execvpe
            searches the caller's environ, so swap it in before a plain execvp. */
         environ = env;
         execvp(argv[0], argv);
+        if (write(sp[1], "x", 1)) {}
         _exit(127);
     }
     close(p[1]);
+    close(sp[1]);
     fcntl(p[0], F_SETFL, O_NONBLOCK);
 
     size_t used = 0;
@@ -111,6 +118,7 @@ int child_run(const char *root, char *const argv[], Jail jail, char *out, size_t
                 kill(pid, SIGKILL);
                 waitpid(pid, &st, 0);
                 close(p[0]);
+                close(sp[0]);
                 if (out) out[used] = 0;
                 if (nbytes) *nbytes = total;
                 return -4;
@@ -125,6 +133,7 @@ int child_run(const char *root, char *const argv[], Jail jail, char *out, size_t
             kill(pid, SIGKILL);
             if (!done) waitpid(pid, &st, 0);
             close(p[0]);
+            close(sp[0]);
             if (out) out[used] = 0;
             if (nbytes) *nbytes = total;
             return late ? -2 : -3;
@@ -135,6 +144,11 @@ int child_run(const char *root, char *const argv[], Jail jail, char *out, size_t
     close(p[0]);
     if (out) out[used] = 0;
     if (nbytes) *nbytes = total;
+    /* the child is gone, so every copy of sp[1] is closed: this read cannot block. */
+    char why = 0;
+    ssize_t got = read(sp[0], &why, 1);
+    close(sp[0]);
+    if (got == 1) return -6;
     /* SIGSYS is the seccomp filter's KILL: the tool reached for a door it does not have. */
     if (WIFSIGNALED(st) && WTERMSIG(st) == SIGSYS) return -5;
     rc = WIFEXITED(st) ? WEXITSTATUS(st) : -1;

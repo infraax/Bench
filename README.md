@@ -209,7 +209,9 @@ nothing more. Tool children are limited by the C supervisor:
   detached after `pivot_root`; everything nosuid, all but `/dev/null` nodev. So a tool cannot read
   outside the world (`/etc`, `/proc`, `$HOME`, the image are gone), and `main/`, `tests/rom/` and
   `sessions/` are read-only **to every tool, root included**: the snapshot seal binds, and a `TEST`
-  cannot mint the token or move ROM. If the view cannot be built, the child does not run (`rc=125`).
+  cannot mint the token or move ROM. If the view cannot be built, the child does not run: the
+  step says `worker not started rule=worker-setup` (a CLOEXEC status pipe tells this apart from a
+  tool that exits 125).
   Cost: ~0.8 ms per child (`make perf`, `/bin/true` 1.5 → 2.2 ms; full jail on a python boot +1.5 ms).
 - **landlock**, `EXEC` children only: writes allowed under `hold/`, `proposed/`, `tests/proposed/`.
   `TEST` children run without landlock (the test runner needs `/tmp`, now private); the namespace and

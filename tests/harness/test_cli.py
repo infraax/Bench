@@ -1770,9 +1770,19 @@ class TestCage(unittest.TestCase):
         w.tool("probe.py", "print('ran')\n")
         r = w.bench("run", w.script("EXEC tools/probe.py\n"))
         self.assertNotEqual(r.returncode, 0, r.stdout)
-        self.assertIn("rc=125", r.stdout)
+        self.assertIn("worker not started rule=worker-setup", r.stdout)
+        self.assertIn("  rule=worker-setup fix: ", r.stdout)
         out = w.session() / "out-1"
         self.assertEqual(out.read_text() if out.exists() else "", "")
+
+    def test_a_tool_exiting_125_is_not_a_setup_failure(self):
+        # the tool's own exit code stays the tool's: rc=125, no worker-setup rule.
+        w = addWorld(self)
+        w.tool("e125.py", "import sys\nsys.exit(125)\n")
+        r = w.bench("run", w.script("EXEC tools/e125.py\n"))
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("rc=125", r.stdout)
+        self.assertNotIn("worker-setup", r.stdout)
 
     def test_worker_finds_python_on_its_own_path(self):
         # the worker env's PATH (/usr/bin:/bin) finds the interpreter, whatever bench's PATH is.
