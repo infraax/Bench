@@ -4,25 +4,57 @@
 no clock, no radio. reached only via exec.
 """
 import hashlib
+import os
+import stat
 import sys
 from pathlib import Path
 
 
+def _skip(name):
+    # bytecode is derived, not board state (matches sha256.c walk: any entry, file or dir)
+    return name == b"__pycache__" or name.endswith(b".pyc")
+
+
+def _walk(abs_dir, rel, out):
+    """regular files under abs_dir as (relpath bytes, abs path); symlinks are not board state."""
+    with os.scandir(abs_dir) as it:
+        for e in it:
+            name = os.fsencode(e.name)
+            if _skip(name):
+                continue
+            r = rel + b"/" + name
+            if e.is_symlink():
+                continue
+            if e.is_file(follow_symlinks=False):
+                out.append((r, e.path))
+            elif e.is_dir(follow_symlinks=False):
+                _walk(e.path, r, out)
+
+
 def tree_hash(paths, base=Path(".")):
+    """the same bytes as supervisor/sha256.c tree_hash: per top path, a missing marker, one
+    regular file, or every regular file below it sorted by relpath bytes (strcmp order)."""
     h = hashlib.sha256()
     for p in paths:
-        top = base / p
-        if not top.exists():
-            h.update(b"missing\0" + p.encode() + b"\0")
+        top = os.path.join(os.fsencode(base), os.fsencode(p))
+        rel = os.fsencode(p)
+        try:
+            st = os.lstat(top)
+        except FileNotFoundError:
+            h.update(b"missing\0" + rel + b"\0")
             continue
-        # bytecode is derived, not board state: skip __pycache__ and .pyc (matches sha256.c)
-        files = [top] if top.is_file() else sorted(
-            f for f in top.rglob("*")
-            if f.is_file() and not f.is_symlink()
-            and "__pycache__" not in f.parts and f.suffix != ".pyc")
-        for f in files:
-            data = f.read_bytes()
-            h.update(f.relative_to(base).as_posix().encode() + b"\0")
+        if stat.S_ISREG(st.st_mode):
+            files = [(rel, top)]
+        elif stat.S_ISDIR(st.st_mode):
+            files = []
+            _walk(top, rel, files)
+            files.sort(key=lambda x: x[0])
+        else:
+            continue                                  # a symlink or device at the top is skipped
+        for r, a in files:
+            with open(a, "rb") as f:
+                data = f.read()
+            h.update(r + b"\0")
             h.update(str(len(data)).encode() + b"\0" + data)
     return h.hexdigest()
 

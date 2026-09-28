@@ -561,6 +561,40 @@ class TestStatusLine(unittest.TestCase):
 from hash import tree_hash  # noqa: E402  (tools/hash.py: same bytes as the C tree hash)
 
 
+
+class TestHashParity(unittest.TestCase):
+    """tools/hash.py must produce the same bytes as the C tree hash (supervisor/romhash), on a
+    tree built to break a naive port: strcmp vs path-part ordering, symlinks at the top and
+    inside, __pycache__ and a dir named *.pyc, a non-UTF-8 name, an empty dir."""
+
+    def test_python_and_c_agree_on_a_hostile_tree(self):
+        r = subprocess.run(["make", "supervisor/romhash"], cwd=IMAGE, stdout=subprocess.PIPE,
+                           stderr=subprocess.STDOUT)
+        self.assertEqual(r.returncode, 0)
+        root = Path(tempfile.mkdtemp(prefix="bench-hash-"))
+        self.addCleanup(rmtree_force, root)
+        rom = root / "tests" / "rom"
+        (rom / "a").mkdir(parents=True)
+        (rom / "a" / "b").write_text("1")
+        (rom / "a-c").write_text("2")                  # '-' < '/': strcmp puts a-c before a/b
+        (rom / "a.c").write_text("3")
+        (rom / "__pycache__").mkdir()
+        (rom / "__pycache__" / "x.pyc").write_bytes(b"skip")
+        (rom / "d.pyc").mkdir()
+        (rom / "d.pyc" / "inside").write_text("skipped with its dir")
+        (rom / "empty").mkdir()
+        (rom / "link").symlink_to(root)                # a symlinked dir is not board state
+        (rom / "flink").symlink_to(rom / "a-c")
+        os.makedirs(os.path.join(os.fsencode(rom), b"n\xff"), exist_ok=True)
+        with open(os.path.join(os.fsencode(rom), b"n\xff", b"f"), "wb") as f:
+            f.write(b"raw name")
+        c = subprocess.run([str(IMAGE / "supervisor" / "romhash"), str(root)], stdout=subprocess.PIPE,
+                           text=True).stdout.strip()
+        self.assertEqual(tree_hash(["tests/rom"], base=root), c)
+        self.assertEqual(tree_hash(["tests/rom", "missing"], base=root),
+                         tree_hash(["tests/rom", "missing"], base=root))
+
+
 NOBODY = 65534
 
 
