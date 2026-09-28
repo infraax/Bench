@@ -93,10 +93,12 @@ gate → [TEST: read board] → tool → [TEST: post-conditions] → quotas → 
 all in `frame()` (`supervisor/frame.c`).
 
 - **gate**: KILL, then the pinned token, then helper `FRAME_OK`. A stop here is no step and no snap.
-- **TEST post-conditions** (the second layer; the namespace view refuses these moves first): before a `TEST`, the frame hashes `main/`, `tests/rom/`, and the session's
+- **TEST post-conditions** (the second layer; the namespace view refuses these moves first, and
+  `TestPostconditionBackstop` exercises this layer by moving the board from outside the child): before a `TEST`, the frame hashes `main/`, `tests/rom/`, and the session's
   frozen artifacts (`SESSION`, `OPS`, every prior `snap-*/`), and stats the token files; after it,
-  again — whatever the test reported. `TEST` children run without landlock and, here, as root, so they
-  can reach `sessions/` where `EXEC` cannot; this catches a test that rewrites a prior snapshot.
+  again — whatever the test reported, and whoever moved it. `TEST` children run without landlock,
+  but their view holds `sessions/` read-only; this layer still catches a prior snapshot rewritten
+  during the step.
   Anything moved → `fault=test-postcondition moved=main,rom,sessions,token`, snap without the board
   (`tree=skipped:tainted`), status `disarmed`, exit 5. A touched or minted `sessions/OWNER_TOKEN` is
   renamed to `OWNER_TOKEN.tainted-<session>` (never deleted), so it arms nothing.
@@ -120,8 +122,8 @@ tool wrote). Over quota: the step is snapped without the board (`tree=skipped:ov
 status `fault`, exit 1. Both quotas and baselines are frozen in `SESSION`.
 
 The file default (256) is set against `T_frame`: creating ~1000 **new** files in one step costs
-~350 ms to snap on the test disk, over the 200 ms budget; 256 new files snap well inside it.
-Unchanged files are cheap (see snapshots).
+~60 ms median on the 2026-09-28 machine but its tail reaches the 200 ms budget (430 ms, 1 run of 9);
+256 new files snap in ~15–30 ms. Unchanged files are cheaper (see snapshots).
 
 ## Snapshots
 
@@ -141,7 +143,9 @@ A finished snapshot is **evidence**, protected in two independent layers:
 
 - **By delta**: a file unchanged since the previous board snap — same (ino, size, mtime, ctime) in
   that snap's `INDEX` — is hard-linked from that snap, never from `hold/`. Everything else is copied.
-  1000 unchanged files: ~8 ms instead of ~340 ms. A name containing a newline is always copied.
+  The link/copy part for 1000 unchanged files is a few ms; the whole frame over 1000 unchanged
+  files is ~42 ms, because `tree=` and `board=` still hash every file (`docs/PERF_AND_MAP.md`).
+  A name containing a newline is always copied.
 - **Restore**: `bench restore snap-<k>` (owner, armed, world locked). The snap's `board=` must match,
   then `main/` + the snap's `hold/` must hash to its `tree=` before anything moves. The old `hold/`
   is kept in `sessions/<new>/hold.before`. The new session's s0 is the restored board; status `restored`.
@@ -161,10 +165,11 @@ A finished snapshot is **evidence**, protected in two independent layers:
 `bench fork snap-<k> <dir>` (owner, armed, ROM crowned) makes a complete new world beside this one:
 
 - the snap's `board=` and `tree=` must check out first (same checks as `restore`); nothing is written otherwise;
-- `main/`, `tools/`, `isa/`, `tests/rom/` are copied from this world, `hold/` from the snap — **copied,
+- `main/`, `tools/`, `isa/`, `tests/rom/` and `supervisor/woz_bus.h` (what `peek.py` reads) are copied
+  from this world, `hold/` from the snap — **copied,
   never hard-linked**, so a write in one world can never reach another;
 - empty `proposed/`, `tests/proposed/`; a fresh `sessions/` holding only `FORKED_FROM`
-  (`forked_from=<world>/sessions/<id>/snap-<k>`, `tree=`, `board=`); `supervisor/` is used by path;
+  (`forked_from=<world>/sessions/<id>/snap-<k>`, `tree=`, `board=`); the binaries are used by path;
 - the new world is **not armed** — no token is copied; the owner arms it (or points several worlds at
   one `BENCH_TOKEN`);
 - the result is checked (`main/`+`hold/` against `tree=`, `tests/rom` against the crown) before `FORK`
@@ -209,12 +214,15 @@ nothing more. Tool children are limited by the C supervisor:
   detached after `pivot_root`; everything nosuid, all but `/dev/null` nodev. So a tool cannot read
   outside the world (`/etc`, `/proc`, `$HOME`, the image are gone), and `main/`, `tests/rom/` and
   `sessions/` are read-only **to every tool, root included**: the snapshot seal binds, and a `TEST`
-  cannot mint the token or move ROM. If the view cannot be built, the child does not run (`rc=125`).
+  cannot mint the token or move ROM. If the view cannot be built, the child does not run: the
+  step says `worker not started rule=worker-setup` (a CLOEXEC status pipe tells this apart from a
+  tool that exits 125).
   Cost: ~0.8 ms per child (`make perf`, `/bin/true` 1.5 → 2.2 ms; full jail on a python boot +1.5 ms).
 - **landlock**, `EXEC` children only: writes allowed under `hold/`, `proposed/`, `tests/proposed/`.
   `TEST` children run without landlock (the test runner needs `/tmp`, now private); the namespace and
   then the frame's post-conditions cover what they must not change.
-- **env**: fixed `PATH`, no `LD_PRELOAD` / `PYTHONPATH`; only `LANG`, `LC_*`, `TZ` pass through.
+- **env**: fixed `PATH=/usr/bin:/bin` (also the one `python3` is looked up on), no `LD_PRELOAD` /
+  `PYTHONPATH`; only `LANG`, `LC_*`, `TZ` pass through.
 - **ROM crown**: `run`, `demo` and `restore` exit 4 if `tests/rom` no longer matches the hash baked at build.
 - **timeout**: each `EXEC`/`TEST` child is killed after `T_tool` (5 s).
 - **output ceiling**: a child's stdout to `out-<n>` is killed past `OUT_CEIL_BYTES` (1 MiB), so a

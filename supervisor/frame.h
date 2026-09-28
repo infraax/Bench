@@ -81,6 +81,7 @@ int  session_state(const Session *s, const char *status);
 
 /* tools are children with a knife. returns exit code, -2 on timeout, -3 on halt (g_halt: the
    child is killed now, not after T_tool), -4 on output past out_max (killed), -5 killed by the seccomp filter (SIGSYS),
+   -6 the worker never started (chdir, jail or exec failed before the tool ran),
    -1 on spawn failure or another signal.
    out_max = 0 means no ceiling.
    stdout is captured into out (truncated) and counted in *nbytes; copied to log_fd if >= 0.

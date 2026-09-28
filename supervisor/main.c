@@ -358,6 +358,7 @@ static int t_exec(Session *s, void *arg) {
     if (rc == -3) return ev(s, 1, "halt op=exec prog=%s child killed rule=kill", in->slot);
     if (rc == -4) return ev(s, 1, "leash op=exec prog=%s out>%u killed rule=out-ceil", in->slot, OUT_CEIL_BYTES);
     if (rc == -5) return ev(s, 1, "deny op=exec prog=%s sandbox SIGSYS rule=sandbox", in->slot);
+    if (rc == -6) return ev(s, 1, "deny op=exec prog=%s worker not started rule=worker-setup", in->slot);
     if (nb > s->bus.cap[SLOT_TTY]) return ev(s, 1, "leash op=exec out=%llu>%u rule=tty-cap", (unsigned long long)nb, s->bus.cap[SLOT_TTY]);
     return ev(s, rc != 0, "op=exec kind=none slot=%s rc=%d out=%llu dirty=0", in->slot, rc, (unsigned long long)nb);
 }
@@ -386,6 +387,7 @@ static int t_test(Session *s, void *arg) {
     if (rc == -3) return ev(s, 1, "halt op=test path=%s child killed rule=kill", in->path);
     if (rc == -4) return ev(s, 1, "leash op=test path=%s out>%u killed rule=out-ceil", in->path, OUT_CEIL_BYTES);
     if (rc == -5) return ev(s, 1, "deny op=test path=%s sandbox SIGSYS rule=sandbox", in->path);
+    if (rc == -6) return ev(s, 1, "deny op=test path=%s worker not started rule=worker-setup", in->path);
     return ev(s, rc != 0, "op=test kind=%s slot=fs path=%s rc=%d result=\"%s\" dirty=0",
               !strcmp(in->slot, "PURE") ? "pure" : "scalar", in->path, rc, out);
 }
@@ -478,8 +480,9 @@ static int rom_ok(void) {
  * file, or sessions/OWNER_TOKEN exists under the world root. presence only, no content.
  * the token is checked here, in the supervisor, before any session dir, frame or lamp.
  * the intern cannot mint it: WRITE takes hold/ and proposed/ only, and EXEC children are
- * write-limited to hold/ and proposed/. TEST children are not write-limited; they run ROM
- * code, which a human crowned. stands in for a later hardware key; nothing more.
+ * write-limited to hold/ and proposed/. TEST children have no landlock, but their view holds
+ * sessions/ read-only (sandbox.c), and the frame's post-conditions back that up. stands in for a
+ * later hardware key; nothing more.
  * the helper (bench-helper, over the mailbox) must agree at start (ARM_OK) and before
  * every frame (FRAME_OK). it can refuse; it cannot arm on its own. missing or silent
  * helper = fail closed, exit 6. */
@@ -1033,6 +1036,30 @@ static int cmd_demo(void) {
     return prefix(out, "GREEN") ? 0 : 1;
 }
 
+/* <session>/snap-<k> or snap-<k> (in the current session) -> sid, sname. one parser for the
+   owner commands that name a snap. 0 ok · 1 no current session · 2 not a snap reference. */
+static int snap_ref(const char *who, const char *arg, char *sid, size_t sidn, char *sname, size_t snn) {
+    char cdir[1024];
+    const char *slash = strchr(arg, '/');
+    if (slash) {
+        size_t l = (size_t)(slash - arg);
+        if (l == 0 || l >= sidn) { fprintf(stderr, "%s: bad session in %s\n", who, arg); return 2; }
+        memcpy(sid, arg, l);
+        sid[l] = 0;
+        snprintf(sname, snn, "%.31s", slash + 1);
+    } else {
+        if (current_dir(cdir, sizeof cdir, sid, sidn)) { fprintf(stderr, "%s: no current session\n", who); return 1; }
+        snprintf(sname, snn, "%.31s", arg);
+    }
+    char *end;
+    if (strncmp(sname, "snap-", 5) || !sname[5] || (strtoul(sname + 5, &end, 10), *end) ||
+        strchr(sid, '/') || strstr(sid, "..") || sid[0] == '.') {
+        fprintf(stderr, "%s: '%s' is not <session>/snap-<k>\n", who, arg);
+        return 2;
+    }
+    return 0;
+}
+
 /* ---- restore: resume = load snap ----
  * bench restore snap-<k> | <session>/snap-<k>
  * an owner command, not an intern op: armed, world locked, ROM crowned. the snap must hold a
@@ -1041,24 +1068,9 @@ static int cmd_demo(void) {
  * the new session's s0 is the restored board. no frames run. */
 static int cmd_restore(int argc, char **argv) {
     if (argc != 1) { fprintf(stderr, "usage: bench restore snap-<k> | <session>/snap-<k>\n"); return 2; }
-    char sid[128], sname[32], cdir[1024];
-    const char *arg = argv[0], *slash = strchr(arg, '/');
-    if (slash) {
-        size_t l = (size_t)(slash - arg);
-        if (l == 0 || l >= sizeof sid) { fprintf(stderr, "restore: bad session in %s\n", arg); return 2; }
-        memcpy(sid, arg, l);
-        sid[l] = 0;
-        snprintf(sname, sizeof sname, "%.31s", slash + 1);
-    } else {
-        if (current_dir(cdir, sizeof cdir, sid, sizeof sid)) { fprintf(stderr, "restore: no current session\n"); return 1; }
-        snprintf(sname, sizeof sname, "%.31s", arg);
-    }
-    char *end;
-    if (strncmp(sname, "snap-", 5) || !sname[5] || (strtoul(sname + 5, &end, 10), *end) ||
-        strchr(sid, '/') || strstr(sid, "..") || sid[0] == '.') {
-        fprintf(stderr, "restore: '%s' is not <session>/snap-<k>\n", arg);
-        return 2;
-    }
+    char sid[128], sname[32];
+    int sr = snap_ref("restore", argv[0], sid, sizeof sid, sname, sizeof sname);
+    if (sr) return sr;
     if (rom_ok() != 0) return 4;
     TokenId tok;
     char tw[256];
@@ -1159,7 +1171,8 @@ static int cmd_restore(int argc, char **argv) {
  * bench fork snap-<k> | <session>/snap-<k> <new-world-dir>
  * an owner command, not an intern op. the snap's board= and tree= must check out before
  * anything is written. the new world gets copies (never hard links: a write in one world must
- * never reach another) of main/ tools/ isa/ tests/rom/ from this world and hold/ from the snap,
+ * never reach another) of main/ tools/ isa/ tests/rom/ supervisor/woz_bus.h from this world and
+ * hold/ from the snap,
  * empty proposed/ and tests/proposed/, and a fresh sessions/ holding only FORKED_FROM. the
  * supervisor binaries are used by path, not copied. it is NOT armed: no token is copied, the
  * owner arms it. it has its own sessions/LOCK, so worlds run in parallel. the new world is
@@ -1167,24 +1180,10 @@ static int cmd_restore(int argc, char **argv) {
  * failure the half-built world is removed. */
 static int cmd_fork(int argc, char **argv) {
     if (argc != 2) { fprintf(stderr, "usage: bench fork snap-<k> | <session>/snap-<k> <new-world-dir>\n"); return 2; }
-    char sid[128], sname[32], cdir[1024];
-    const char *arg = argv[0], *target = argv[1], *slash = strchr(arg, '/');
-    if (slash) {
-        size_t l = (size_t)(slash - arg);
-        if (l == 0 || l >= sizeof sid) { fprintf(stderr, "fork: bad session in %s\n", arg); return 2; }
-        memcpy(sid, arg, l);
-        sid[l] = 0;
-        snprintf(sname, sizeof sname, "%.31s", slash + 1);
-    } else {
-        if (current_dir(cdir, sizeof cdir, sid, sizeof sid)) { fprintf(stderr, "fork: no current session\n"); return 1; }
-        snprintf(sname, sizeof sname, "%.31s", arg);
-    }
-    char *end;
-    if (strncmp(sname, "snap-", 5) || !sname[5] || (strtoul(sname + 5, &end, 10), *end) ||
-        strchr(sid, '/') || strstr(sid, "..") || sid[0] == '.') {
-        fprintf(stderr, "fork: '%s' is not <session>/snap-<k>\n", arg);
-        return 2;
-    }
+    char sid[128], sname[32];
+    const char *target = argv[1];
+    int sr = snap_ref("fork", argv[0], sid, sizeof sid, sname, sizeof sname);
+    if (sr) return sr;
     if (!target[0]) { fprintf(stderr, "fork: empty target\n"); return 2; }
     struct stat st;
     if (lstat(target, &st) == 0) { fprintf(stderr, "fork: %s exists — a fork makes a new world, never into one\n", target); return 1; }
@@ -1237,8 +1236,9 @@ static int cmd_fork(int argc, char **argv) {
     if (mkdir(target, 0755) != 0) { fprintf(stderr, "fork: cannot create %s: %s\n", target, strerror(errno)); return 1; }
     uint64_t t0 = nowns();
     char src[1200], dst[4200];
-    static const char *const FROM_WORLD[] = {"main", "tools", "isa", "tests/rom"};
-    static const char *const EMPTY[] = {"tests", "proposed", "tests/proposed", "sessions"};
+    /* supervisor/woz_bus.h: the one lamp-byte definition tools/peek.py reads. binaries stay by path. */
+    static const char *const FROM_WORLD[] = {"main", "tools", "isa", "tests/rom", "supervisor/woz_bus.h"};
+    static const char *const EMPTY[] = {"tests", "proposed", "tests/proposed", "sessions", "supervisor"};
     int bad = 0;
     for (size_t i = 0; !bad && i < sizeof EMPTY / sizeof *EMPTY; i++)
         bad = snprintf(dst, sizeof dst, "%s/%s", target, EMPTY[i]) >= (int)sizeof dst || mkdir(dst, 0755) != 0;
@@ -1319,22 +1319,8 @@ static int cmd_verify(int argc, char **argv) {
     const char *one = NULL, *arg = argc == 1 ? argv[0] : NULL;
     char sname[32] = "";
     if (arg) {
-        const char *slash = strchr(arg, '/');
-        if (slash) {
-            size_t l = (size_t)(slash - arg);
-            if (l == 0 || l >= sizeof sid) { fprintf(stderr, "verify: bad session in %s\n", arg); return 2; }
-            memcpy(sid, arg, l); sid[l] = 0;
-            snprintf(sname, sizeof sname, "%.31s", slash + 1);
-        } else {
-            if (current_dir(cdir, sizeof cdir, sid, sizeof sid)) { fprintf(stderr, "verify: no current session\n"); return 1; }
-            snprintf(sname, sizeof sname, "%.31s", arg);
-        }
-        char *end;
-        if (strncmp(sname, "snap-", 5) || !sname[5] || (strtoul(sname + 5, &end, 10), *end) ||
-            strchr(sid, '/') || strstr(sid, "..") || sid[0] == '.') {
-            fprintf(stderr, "verify: '%s' is not <session>/snap-<k>\n", arg);
-            return 2;
-        }
+        int sr = snap_ref("verify", arg, sid, sizeof sid, sname, sizeof sname);
+        if (sr) return sr;
         one = sname;
     } else if (current_dir(cdir, sizeof cdir, sid, sizeof sid)) {
         fprintf(stderr, "verify: no current session\n");

@@ -53,8 +53,13 @@ class World:
     def __init__(self):
         self.root = Path(tempfile.mkdtemp(prefix="bench-h-"))
         ign = shutil.ignore_patterns("__pycache__", "bench", "bench-helper", "bus_test", "romhash", "*.o")
-        for d in ("supervisor", "tools", "isa"):
+        for d in ("tools", "isa"):
             shutil.copytree(IMAGE / d, self.root / d, ignore=ign)
+        # a world reads one file from supervisor/: the lamp-byte header peek.py decodes. the
+        # binaries run from the image; the sources are not world state. (was: all of supervisor/,
+        # ~2x the per-world setup cost.)
+        (self.root / "supervisor").mkdir()
+        shutil.copy2(IMAGE / "supervisor" / "woz_bus.h", self.root / "supervisor" / "woz_bus.h")
         shutil.copytree(IMAGE / "tests" / "rom", self.root / "tests" / "rom", ignore=ign)
         for d in ("main", "hold", "sessions", "tests/proposed"):
             (self.root / d).mkdir(parents=True, exist_ok=True)
@@ -988,7 +993,7 @@ class TestFork(unittest.TestCase):
         self.assertEqual((t / "main" / "hello.txt").read_text(), "hello bench\n")
         for d in ("tools", "isa", "tests/rom", "proposed", "tests/proposed"):
             self.assertTrue((t / d).is_dir(), d)
-        self.assertFalse((t / "supervisor").exists())         # binaries are used by path
+        self.assertEqual(sorted(p.name for p in (t / "supervisor").iterdir()), ["woz_bus.h"])  # binaries by path
         origin = (t / "sessions" / "FORKED_FROM").read_text()
         self.assertIn(f"/sessions/{w.session().name}/snap-1\n", origin)
         tree = re.search(r"^tree=(\w+)$", (snap / "MANIFEST").read_text(), re.M).group(1)
@@ -999,6 +1004,16 @@ class TestFork(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stdout)
         s0 = (f.snaps()[0] / "MANIFEST").read_text()
         self.assertIn(f"tree={tree}\n", s0)                  # the fork's s0 is the snap's board
+
+    def test_peek_works_in_a_fork_world(self):
+        w = self.source()
+        t = forkTarget(self)
+        self.assertEqual(w.bench("fork", "snap-1", str(t)).returncode, 0)
+        f = Forked(t)
+        f.arm()
+        r = f.bench("run", f.script("EXEC tools/peek.py\n"))
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertIn("HOLD", (f.session() / "out-1").read_text())
 
     def test_session_slash_snap_form(self):
         w = self.source()
@@ -1246,8 +1261,8 @@ class TestPostconditions(unittest.TestCase):
     1. the namespace (sandbox.c): a TEST child sees main/, ROM and sessions/ read-only, so a move
        is refused inside the child (EROFS) and nothing moves — asserted below;
     2. the frame's post-conditions: hash main/, ROM, sessions, the token before and after, and
-       disarm on any move. no TEST can reach layer 2 while layer 1 holds; it stays as the backstop
-       for a kernel where the view could be bypassed."""
+       disarm on any move. no TEST child can reach layer 2 while layer 1 holds; TestPostconditionBackstop
+       drives it by moving the board from outside the child."""
 
     def runner(self, w, body):
         # fixture runner: tries `body` (what a crowned test must not do), reports how it went,
@@ -1337,6 +1352,79 @@ class TestPostconditions(unittest.TestCase):
         self.assert_refused(w, r, k=2)
         self.assertEqual((w.snaps()[1] / "hold" / "keep.txt").read_text(), "v1\n")
         self.assertEqual(w.bench("verify").returncode, 0)
+
+
+class TestPostconditionBackstop(unittest.TestCase):
+    """layer 2 on its own. the worker view (layer 1) stops a TEST child from moving the board, so
+    here the board is moved from OUTSIDE the child, by the harness, while the TEST step runs. the
+    frame hashes main/, ROM, sessions and the token before and after the tool — whoever moved them
+    — so it must disarm. handshake, no sleeps: the child writes hold/started, the harness moves the
+    board and writes hold/go, the child reports GREEN."""
+
+    RUNNER = ("import os, time\n"
+              "open('hold/started', 'w').write('1')\n"
+              "t0 = time.monotonic()\n"
+              "while not os.path.exists('hold/go') and time.monotonic() - t0 < 4:\n"
+              "    time.sleep(0.01)\n"
+              "print('GREEN 1 tests')\n")
+
+    def during_test(self, w, move, script="TEST PURE tests/rom/test_isa.py\n"):
+        (w.root / "tools" / "test_runner.py").write_text(self.RUNNER)
+        proc = subprocess.Popen([str(BENCH), "run", w.script(script)], cwd=IMAGE, env=w.env,
+                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        started = w.root / "hold" / "started"
+        t0 = time.monotonic()
+        while not started.exists() and time.monotonic() - t0 < 10 and proc.poll() is None:
+            time.sleep(0.01)
+        self.assertTrue(started.exists(), "the TEST child never started")
+        move(w)
+        (w.root / "hold" / "go").write_text("1")
+        out, _ = proc.communicate(timeout=30)
+        return proc.returncode, out
+
+    def assert_tainted(self, w, rc, out, what):
+        self.assertEqual(rc, 5, out)
+        self.assertIn(f"fault=test-postcondition moved={what}", out)
+        self.assertIn("  rule=test-moved fix: ", out)
+        self.assertEqual(w.state()["status"], "disarmed")
+        man = (w.snaps()[-1] / "MANIFEST").read_text()
+        self.assertIn("tree=skipped:tainted", man)
+        self.assertIn("TAINT", (w.session() / "log").read_text())
+
+    def test_main_moved_during_a_test_disarms(self):
+        w = addWorld(self)
+        rc, out = self.during_test(w, lambda w: (w.root / "main" / "moved.txt").write_text("x"),
+                                   "TEST PURE tests/rom/test_isa.py\nWAIT 1\n")
+        self.assert_tainted(w, rc, out, "main")
+        self.assertEqual(w.state()["n"], "1")          # WAIT never ran
+
+    def test_rom_moved_during_a_test_disarms(self):
+        w = addWorld(self)
+        rom = w.root / "tests" / "rom" / "test_isa.py"
+        rc, out = self.during_test(w, lambda w: rom.write_text(rom.read_text() + "# moved\n"))
+        self.assert_tainted(w, rc, out, "rom")
+
+    def test_token_touched_during_a_test_disarms_and_quarantines_it(self):
+        w = addWorld(self)
+
+        def touch(w):
+            st = w.token.stat()
+            os.utime(w.token, ns=(st.st_atime_ns, st.st_mtime_ns + 10**9))
+        rc, out = self.during_test(w, touch)
+        self.assert_tainted(w, rc, out, "token")
+        self.assertFalse(w.token.exists())
+        self.assertEqual(len(list((w.root / "sessions").glob("OWNER_TOKEN.tainted-*"))), 1)
+
+    def test_prior_snapshot_edited_during_a_test_disarms(self):
+        w = addWorld(self)
+
+        def tamper(w):
+            man = w.snaps()[0] / "MANIFEST"
+            man.parent.chmod(0o755)
+            man.chmod(0o644)
+            man.write_text(man.read_text() + "# tamper\n")
+        rc, out = self.during_test(w, tamper)
+        self.assert_tainted(w, rc, out, "sessions")
 
 
 class TestMailbox(unittest.TestCase):
@@ -1770,9 +1858,28 @@ class TestCage(unittest.TestCase):
         w.tool("probe.py", "print('ran')\n")
         r = w.bench("run", w.script("EXEC tools/probe.py\n"))
         self.assertNotEqual(r.returncode, 0, r.stdout)
-        self.assertIn("rc=125", r.stdout)
+        self.assertIn("worker not started rule=worker-setup", r.stdout)
+        self.assertIn("  rule=worker-setup fix: ", r.stdout)
         out = w.session() / "out-1"
         self.assertEqual(out.read_text() if out.exists() else "", "")
+
+    def test_a_tool_exiting_125_is_not_a_setup_failure(self):
+        # the tool's own exit code stays the tool's: rc=125, no worker-setup rule.
+        w = addWorld(self)
+        w.tool("e125.py", "import sys\nsys.exit(125)\n")
+        r = w.bench("run", w.script("EXEC tools/e125.py\n"))
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("rc=125", r.stdout)
+        self.assertNotIn("worker-setup", r.stdout)
+
+    def test_worker_finds_python_on_its_own_path(self):
+        # the worker env's PATH (/usr/bin:/bin) finds the interpreter, whatever bench's PATH is.
+        w = addWorld(self)
+        w.env["PATH"] = "/nonexistent"
+        w.tool("which.py", "import os\nprint(os.environ['PATH'])\n")
+        r = w.bench("run", w.script("EXEC tools/which.py\n"))
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertEqual((w.session() / "out-1").read_text(), "/usr/bin:/bin\n")
 
     def test_landlock_denies_write_to_rom(self):
         w = addWorld(self)
