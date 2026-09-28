@@ -1,0 +1,60 @@
+---
+title: Compare
+nav: compare
+permalink: /compare/
+wide: true
+description: Where Bench sits among agent harnesses — layers, not a brand war.
+---
+<h1>Compare</h1>
+<p class="board__line">Bench is not the same sport.</p>
+
+<p>"Agent harness" means four different things. A loop runs the model; custody decides what a
+worker may touch and records what happened; an eval layer scores tasks; a meta-harness governs
+other harnesses. Bench is custody, with an eval layer's discipline about evidence. It does not
+solve benchmark tasks and makes no benchmark claims — a loop on top of it would.</p>
+
+<div data-compare>
+  <div class="filters" role="group" aria-label="Filter by layer">
+    <button type="button" data-layer="all" aria-pressed="true">All</button>
+    <button type="button" data-layer="custody" aria-pressed="false">Custody</button>
+    <button type="button" data-layer="loop" aria-pressed="false">Loop</button>
+    <button type="button" data-layer="eval" aria-pressed="false">Eval</button>
+    <button type="button" data-layer="meta" aria-pressed="false">Meta</button>
+    <label><input type="checkbox" data-sealed> sealed per-step snaps</label>
+    <span class="mute" data-count aria-live="polite"></span>
+  </div>
+
+  <table class="cmp">
+    <thead>
+      <tr><th>Harness</th><th>Layer</th><th>Action surface</th><th>Snapshots</th><th>Crown / approval</th><th>Model in tree</th></tr>
+    </thead>
+    <tbody>
+      {% for r in site.data.compare.rows %}
+      <tr data-layer="{{ r.layer }}" data-sealed="{{ r.sealed }}"{% if r.name == "Bench" %} class="is-bench"{% endif %}>
+        <td>{{ r.name }}</td>
+        <td data-label="Layer"><span class="layer layer--{{ r.layer }}">{{ r.layer }}</span></td>
+        <td data-label="Action surface">{{ r.surface }}</td>
+        <td data-label="Snapshots">{{ r.snaps }}</td>
+        <td data-label="Crown / approval">{{ r.crown }}</td>
+        <td data-label="Model in tree">{{ r.model }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<p class="caption">From a code audit of 22 repositories at pinned commits on 2026-09-28.
+"not found" means not found in that audit, not proven absent. Other projects change; check the
+<a href="{{ site.repo }}/blob/HEAD/docs/history/comparison-2026-09-28.md">full comparison</a> and the
+<a href="{{ site.repo }}/tree/HEAD/docs/research">pinned sources</a>.</p>
+
+<h2>What the custody layer adds</h2>
+<div class="cols">
+  <div class="card"><h3>Every step is evidence</h3><p>Sealed, content-hashed snapshot after each step; <code>verify</code> before <code>restore</code> or <code>fork</code>.</p></div>
+  <div class="card"><h3>A closed action set</h3><p>Five verbs instead of an open shell — the class of bug where an allowlisted command smuggles a second one has no path.</p></div>
+  <div class="card"><h3>The key stays with the owner</h3><p>The token is re-checked before every frame; tests cannot move <code>main/</code>, ROM, the token or prior snaps.</p></div>
+</div>
+
+<h2>What it leaves to others</h2>
+<p>A model, context management, a policy list with an ASK tier, network access for workers, replay.
+Those belong to the loop on top — or to <a href="{{ site.repo }}/blob/HEAD/docs/DEVELOPMENT_PLAN.md">later sprints</a>.</p>

@@ -18,10 +18,12 @@ tip a stable name:
 1. **Settings → Pages → Build and deployment → Source: Deploy from a branch.**
 2. **Branch:** the default branch · **Folder:** `/docs` → **Save**.
 3. After the first build (a minute or two) the site is at `https://infraax.github.io/Bench/`.
-   `docs/_config.yml` sets the title and the plain `jekyll-theme-minimal` theme and excludes
-   `docs/history/` and `docs/research/` (archival; linked on github.com instead).
-4. Mermaid graphs render on github.com, not on the Pages site (no diagram JS is added); the site
-   links to the github.com view of `architecture.md` for pictures.
+   It is a custom theme in `docs/` (`_layouts/default.html`, `assets/css/crypt.css`,
+   `assets/js/site.js`; data in `_data/`; pages in `pages/`), `baseurl: /Bench`. No remote theme,
+   no CDN, no trackers. `docs/history/` and `docs/research/` are excluded (linked on github.com).
+4. Diagrams are pre-rendered SVGs (`assets/diagrams/`), so they show on every phone without
+   diagram JS; the Mermaid in README/architecture.md still renders on github.com.
+5. After a push, **hard-refresh** the site (Pages caches CSS for a few minutes).
 
 Pages builds use Actions minutes on private repositories; see "Actions" below.
 

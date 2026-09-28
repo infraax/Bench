@@ -1,12 +1,35 @@
 # SPDX-License-Identifier: MIT OR Apache-2.0
-# GitHub Pages, deployed from the default branch's /docs folder (see github.md).
-# Plain GitHub Pages Jekyll: no custom JS, no diagram package. Mermaid blocks render on github.com;
-# on this site they show as source (index.md links to the github.com view).
+# GitHub Pages + Jekyll, deployed from the default branch's /docs folder (see github.md).
+# Custom theme ("crypt"): docs/_layouts, docs/assets/css/crypt.css, docs/assets/js/site.js.
+# No remote theme, no CDN, no trackers. Diagrams are pre-rendered SVGs in docs/assets/diagrams/.
 title: Bench
-description: A custody kernel for agent work — five verbs, framed steps, sealed snapshots. Not an agent.
-theme: jekyll-theme-minimal
-# archival material stays readable on github.com; it is not site content (and holds text Liquid
-# would rewrite).
+description: A custody kernel for agent work
+tagline: custody kernel — five verbs, sealed snaps. Not an agent.
+url: https://infraax.github.io
+baseurl: /Bench
+repo: https://github.com/infraax/Bench
+
+markdown: kramdown
+kramdown:
+  input: GFM
+  hard_wrap: false
+
+# the five nav items, in order. `key` matches a page's `nav:` front matter.
+nav:
+  - { key: home, title: Home, url: / }
+  - { key: architecture, title: Architecture, url: /architecture/ }
+  - { key: compare, title: Compare, url: /compare/ }
+  - { key: measure, title: Measure, url: /measure/ }
+  - { key: start, title: Start, url: /start/ }
+
+# every page gets the crypt layout, including the plain docs (handbook, reference, ...).
+defaults:
+  - scope: { path: "" }
+    values: { layout: default }
+
+# archival material stays readable on github.com, not on the site (and holds text Liquid would
+# rewrite); diagram sources are inputs, not pages.
 exclude:
   - history/
   - research/
+  - assets/diagrams/src/

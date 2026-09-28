@@ -1,0 +1,16 @@
+%% SPDX-License-Identifier: MIT OR Apache-2.0
+%% source for docs/assets/diagrams/layers.svg (regenerate: see README.md in this folder)
+flowchart TB
+    loop["agent loop / model<br/>(not in this tree)"]
+    crown["spec/ + tests/rom/ — the crown<br/>frozen meaning, ROM hash baked at build"]
+    isa["ISA — five verbs<br/>READ · WRITE · EXEC · TEST · WAIT"]
+    sup["supervisor/ — the frame<br/>clock · gate · token · quotas · snapshots · lamps"]
+    tools["tools/ — hash.py · peek.py · test_runner.py"]
+    world["world dirs — main/ (owned) · hold/ (quarantine) · sessions/ (evidence)"]
+
+    loop -.->|"drives the intern"| isa
+    crown -->|"defines and checks"| isa
+    isa -->|"parsed and framed by"| sup
+    sup -->|"runs, jailed"| tools
+    sup -->|"reads, snapshots, guards"| world
+    tools -->|"write only hold/ + proposed/"| world

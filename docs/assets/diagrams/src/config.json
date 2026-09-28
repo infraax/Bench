@@ -1,0 +1,41 @@
+{
+  "theme": "base",
+  "themeVariables": {
+    "background": "#2a2621",
+    "primaryColor": "#1c1915",
+    "primaryBorderColor": "#e8c547",
+    "primaryTextColor": "#e8e0d4",
+    "secondaryColor": "#2a2621",
+    "tertiaryColor": "#2a2621",
+    "lineColor": "#9a9084",
+    "textColor": "#e8e0d4",
+    "edgeLabelBackground": "#2a2621",
+    "clusterBkg": "#221f1b",
+    "clusterBorder": "#3f3a33",
+    "actorBkg": "#1c1915",
+    "actorBorder": "#e8c547",
+    "actorTextColor": "#e8e0d4",
+    "actorLineColor": "#3f3a33",
+    "signalColor": "#e8e0d4",
+    "signalTextColor": "#e8e0d4",
+    "labelBoxBkgColor": "#1c1915",
+    "labelBoxBorderColor": "#3f3a33",
+    "labelTextColor": "#e8e0d4",
+    "loopTextColor": "#9a9084",
+    "noteBkgColor": "#3a2a1c",
+    "noteBorderColor": "#c45c26",
+    "noteTextColor": "#e8e0d4",
+    "activationBkgColor": "#2a2621",
+    "sequenceNumberColor": "#1c1915",
+    "fontFamily": "system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif",
+    "fontSize": "15px"
+  },
+  "flowchart": {
+    "htmlLabels": false,
+    "curve": "basis"
+  },
+  "sequence": {
+    "mirrorActors": false
+  },
+  "htmlLabels": false
+}

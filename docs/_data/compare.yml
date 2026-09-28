@@ -1,0 +1,47 @@
+# Rows for /compare/. Facts from docs/compare.md and the 2026-09-28 audit
+# (docs/history/comparison-2026-09-28.md, docs/research/evidence.txt), pinned SHAs in
+# docs/research/repos.tsv. "not found" = not found in the audit, not proven absent.
+columns: [layer, surface, snaps, crown, model]
+rows:
+  - name: Bench
+    layer: custody
+    surface: "five closed verbs: READ WRITE EXEC TEST WAIT"
+    snaps: "yes — every step, sealed, sha256, verify before restore/fork"
+    crown: "owner only — ROM hash baked at build"
+    model: "no"
+    sealed: true
+  - name: Pi (pi-mono)
+    layer: loop
+    surface: "small tool set: bash, read, write, edit, grep, find, ls (bounded output)"
+    snaps: "not found"
+    crown: "not found"
+    model: "yes"
+    sealed: false
+  - name: Codex
+    layer: loop
+    surface: "open shell + edits; linux-sandbox for the child (custody layer inside)"
+    snaps: "not found"
+    crown: "approval modes, per tool call"
+    model: "yes"
+    sealed: false
+  - name: Inspect (inspect_ai)
+    layer: eval
+    surface: "task-defined tools; limits and approvers as objects"
+    snaps: "eval logs (re-scorable), not per-step sealed snaps"
+    crown: "approvers, per tool call"
+    model: "yes"
+    sealed: false
+  - name: OpenEnv
+    layer: eval
+    surface: "reset / step / state environment interface"
+    snaps: "environment state, not sealed"
+    crown: "not found"
+    model: "no — the agent is outside"
+    sealed: false
+  - name: Omnigent
+    layer: meta
+    surface: "governs other harnesses; policy ALLOW / DENY / ASK + reason, fail closed"
+    snaps: "not found"
+    crown: "ASK policy"
+    model: "yes (composes agents)"
+    sealed: false

@@ -1,44 +1,47 @@
-# HANDOFF — 2026-09-28 (session 9: public face)
+# HANDOFF — 2026-09-28 (session 10: the site)
 
 One page. Facts, not a diary; history is in `docs/history/`.
 
 ## Head
 
-- Default branch (product tip): `claude/bench-foundation-c015ut` at `d3d1186` — PR #3 merged.
-- This session's branch: `claude/handoff-start-004f8n`, restarted from `d3d1186` (fast-forward),
-  pushed; docs-only commits on top: `63bbd16`, `bd7e63b`, `6bc6ac7`, and this file.
-- `make test-rom`: bus ok · ROM 55 · green. No Makefile or code change, so `make ledger-test` not
-  re-run; last full row: `ledger/20260928-112345-f038429.1` (55 ROM, 146 harness, green; same code).
-- All six Mermaid blocks (README 2, `docs/architecture.md` 4) parse and render with mermaid-cli 11.
+- Default branch (product tip): `claude/bench-foundation-c015ut` at `06f5db1` (PR #4 merged).
+- This session's branch: `claude/handoff-start-004f8n`, restarted from `06f5db1`, pushed:
+  `6a40e62` theme · `4290914` pages · `36f2bfd` diagrams · and this file. Docs-only; no C, ROM,
+  Makefile or `sandbox.c` change.
+- `make test-rom`: bus ok · ROM 55 · green. `make ledger-test` not re-run (no code change); last
+  full row `ledger/20260928-112345-f038429.1` (55 ROM, 146 harness).
 
 ## Done this session
 
-- `63bbd16` docs: README badges (license, Linux, hosted CI = compile + test-rom), "custody crypt,
-  not an agent", process graph and layer graph; architecture: same graphs + frame sequence + rings
-- `bd7e63b` docs: Pages home `docs/index.md`, `docs/_config.yml` (plain Jekyll, minimal theme,
-  excludes history/ and research/), `docs/github.md` (the owner's clicks)
-- `6bc6ac7` docs: `SECURITY.md` (private vulnerability reporting, no bounty), `.github/CODEOWNERS` (@infraax)
+- **Site: files added.** Custom Jekyll theme in `docs/` (`_layouts/`, `assets/css/crypt.css`,
+  `assets/js/site.js`, `_data/perf.yml`, `_data/compare.yml`), five pages: Home (product board),
+  Architecture (`/architecture/`, verb explorer), Compare (`/compare/`, filterable), Measure
+  (`/measure/`, CSS bars), Start (`/start/`). Pre-rendered SVG diagrams in `assets/diagrams/`.
+- Built locally with the `github-pages` gem (Jekyll 3.10) at `baseurl /Bench`; headless Chromium
+  at 390 and 1280 px: no 4xx, no JS errors, no horizontal page scroll; wide diagrams scroll inside
+  their card on a phone, with a condensed phone version of the process graph.
 
-## Owner calls — open (all are Settings clicks, listed in `docs/github.md`)
+## Owner calls — open
 
-- **Pages: the owner flips the switch** — Settings → Pages → Deploy from a branch → default
-  branch, `/docs`. Site: `https://infraax.github.io/Bench/`. Mermaid renders on github.com only.
-- Default branch name (a stable `main` if wanted), About blurb and topics, private vulnerability
-  reporting, Actions permissions/minutes.
+- **Pages: the owner hard-refreshes** `https://infraax.github.io/Bench/` after this branch reaches
+  the default branch (Pages builds from the default branch's `/docs`).
+- Unchanged from `docs/github.md`: default branch name, About blurb and topics, private
+  vulnerability reporting, Actions permissions/minutes.
 
-## Owner calls — decided (unchanged)
+## Keep in step
 
-- Hosted CI = compile + `make test-rom`; the full gate is `make ledger-test` on a box that runs
-  workers. No sysctl / AppArmor / privileged-container changes. `sandbox.c` keeps no SPDX line.
+- Numbers on the site live in `docs/_data/perf.yml`, copied from `docs/PERF_AND_MAP.md`: change
+  the doc first, then the data file.
+- Diagrams: edit the Mermaid in README / `docs/architecture.md`, copy to
+  `docs/assets/diagrams/src/`, re-render (see its README), run `fix_size.py`.
 
 ## Leftover (owner-gated, unchanged)
 
 - PID namespace and an unprivileged uid for workers — worker policy.
-- Prerequisite blocks (`EXEC` of a missing tool, `WAIT` over `T_tool` at parse); `frame_ms=` in MANIFEST.
-- Test structure from `docs/TEST_BUDGET.md`; the v1 toolbox (`docs/TOOLBOX.md`).
+- Prerequisite blocks; `frame_ms=` in MANIFEST; test structure (`docs/TEST_BUDGET.md`); the v1 toolbox.
 
 ## Do not touch
 
 - `spec/` meaning · no sixth verb · `supervisor/sandbox.c` unless the owner reopens worker policy
-- No second workflow running `make test` on hosted runners; no diagram JS on the site.
+- No trackers, no CDN, no blog; no second workflow running `make test` on hosted runners.
 - Never put tokens or `sessions/` contents in the ledger, a commit, or a chat.

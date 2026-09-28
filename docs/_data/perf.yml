@@ -1,0 +1,55 @@
+# Numbers copied from docs/PERF_AND_MAP.md §B (2026-09-28). Change them there first, then here.
+machine: "4 CPUs · Linux 6.18 · Python 3.11.15 · run as root · medians, n=20 unless noted"
+
+# the three on the home board
+headline:
+  - { label: "boot", value: "1.6", unit: "ms", note: "bench status, cold" }
+  - { label: "fork world", value: "5.5", unit: "ms", note: "bench fork, n=5" }
+  - { label: "full suite", value: "22.2", unit: "s", note: "make test: 55 ROM + harness" }
+
+groups:
+  - title: "One step, end to end"
+    unit: ms
+    max: 45
+    note: "Bench's own frame budget T_frame is 200 ms; the worker's T_tool is 5 s."
+    rows:
+      - { label: "bench status (boot)", median: 1.60, p95: 2.18 }
+      - { label: "empty frame (WAIT 0)", median: 2.7, p95: 4.2, text: "0.6–2.7", note: "median ranged 0.6–2.7 across two worlds" }
+      - { label: "arm + one frame", median: 25.3, p95: 31.0 }
+      - { label: "worker tool_ms (hash.py)", median: 32, p95: 42, note: "n=180" }
+      - { label: "EXEC hash.py, whole frame", median: 37.3, p95: 42.1 }
+
+  - title: "Snapshot cost by size of hold/"
+    unit: ms
+    max: 50
+    note: "Unchanged files are hard-linked from the previous snap, but every frame still hashes all of main/ + hold/."
+    rows:
+      - { label: "0 files", median: 0.59, p95: 1.08 }
+      - { label: "1 × 64 KiB", median: 1.78, p95: 2.68 }
+      - { label: "256 × 1 B", median: 10.5, p95: 15.4 }
+      - { label: "1000 × 1 B", median: 41.8, p95: 48.7 }
+
+  - title: "Worker jail, per child"
+    unit: "µs"
+    max: 2600
+    note: "/bin/true, n=50. On a python boot (~9–11 ms) the jail is within noise."
+    rows:
+      - { label: "bare fork + exec", median: 1345 }
+      - { label: "+ namespaces", median: 2091 }
+      - { label: "+ landlock + seccomp", median: 2542 }
+
+  - title: "Four worlds, one script each"
+    unit: s
+    max: 1.4
+    note: "bench fork worlds each hold their own lock; n=1 run of make perf."
+    rows:
+      - { label: "one after another", median: 1.36 }
+      - { label: "in parallel (3.6×)", median: 0.38 }
+
+  - title: "Suites"
+    unit: s
+    max: 23.2
+    note: "ROM is pure algebra; the harness drives the binary through throwaway worlds."
+    rows:
+      - { label: "make test-rom (ROM wall)", median: 0.08, p95: 0.135 }
+      - { label: "make test (full)", median: 22.2, p95: 23.2 }

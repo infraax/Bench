@@ -1,0 +1,16 @@
+%% SPDX-License-Identifier: MIT OR Apache-2.0
+%% source for docs/assets/diagrams/process-tall.svg: the phone layout of process.svg (same parties, stores merged)
+flowchart TB
+    owner(["owner"])
+    intern(["intern"])
+    bench["bench run<br/>clock · gate · quotas"]
+    helper["bench-helper<br/>mailbox, parent-only"]
+    worker["worker child<br/>world-only view"]
+    store[("OWNER_TOKEN · LOCK<br/>snap-k · out-n · log")]
+
+    owner -->|"arms, starts"| bench
+    intern -->|"five verbs"| bench
+    bench <-->|"FRAME_OK"| helper
+    bench -->|"fork, knife"| worker
+    worker -->|"pipe"| bench
+    bench -->|"re-check, lock, seal"| store

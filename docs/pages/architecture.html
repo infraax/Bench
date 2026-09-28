@@ -1,0 +1,161 @@
+---
+title: Architecture
+nav: architecture
+permalink: /architecture/
+wide: true
+description: Custody, not the loop — the layers, the five verbs, one frame, the rings.
+---
+<h1>Architecture</h1>
+<p class="board__line">Custody, not the loop.</p>
+
+<p>Most agent tools are a <strong>loop</strong>: prompt → model → tool call → observe → repeat.
+They own the model and the context. Bench is the layer under a loop — the <strong>custody</strong>
+of the world the loop works on. It owns the clock, the gate, the write rings and the evidence.
+It trusts nothing the intern wrote until the owner crowns it.</p>
+
+<h2>How the layers stack</h2>
+<figure class="figure figure--scroll">
+  <div class="figure__frame">
+    <a class="figure__open" href="{{ '/assets/diagrams/layers.svg' | relative_url }}" aria-label="Open the diagram full size">
+    <picture>
+      <img src="{{ '/assets/diagrams/layers.svg' | relative_url }}" width="515" height="760"
+       alt="An agent loop or model, outside this tree, drives the intern. The crown — spec and ROM tests, hashed at build — defines and checks the ISA of five verbs. The supervisor parses and frames those verbs, runs tools jailed, and reads, snapshots and guards the world directories: main, hold and sessions. Tools write only hold and proposed.">
+    </picture>
+    </a>
+  </div>
+  <p class="figure__hint">Swipe sideways to read · tap to open full size</p>
+  <figcaption>The loop and any model sit outside the tree. The binary is the floor; the spec is above it.</figcaption>
+</figure>
+
+<h2>Five verbs — what each may touch</h2>
+<p>No sixth. A browser, a compiler or a judge is a program in <code>tools/</code> or a device in a
+slot. Pick a verb:</p>
+
+<div class="explorer" data-explorer>
+  <div class="explorer__tabs" role="tablist" aria-label="Verbs">
+    <button role="tab" id="t-read"  aria-controls="v-read"  aria-selected="true">READ</button>
+    <button role="tab" id="t-write" aria-controls="v-write" aria-selected="false">WRITE</button>
+    <button role="tab" id="t-exec"  aria-controls="v-exec"  aria-selected="false">EXEC</button>
+    <button role="tab" id="t-test"  aria-controls="v-test"  aria-selected="false">TEST</button>
+    <button role="tab" id="t-wait"  aria-controls="v-wait"  aria-selected="false">WAIT</button>
+  </div>
+
+  <section class="verb" id="v-read" role="tabpanel" aria-labelledby="t-read">
+    <h3>READ</h3>
+    <p class="verb__form">READ fs &lt;path&gt;</p>
+    <div class="verb__grid">
+      <div><h4>May touch</h4><ul>
+        <li>any regular file inside the world, through the <code>fs</code> slot</li>
+        <li>up to 4096 bytes; the bytes land in <code>out-n</code>, pinned by sha256</li>
+      </ul></div>
+      <div class="no"><h4>Must not</h4><ul>
+        <li>leave the world: no leading <code>/</code>, no <code>..</code>, no symlink followed</li>
+        <li>read a fifo, socket or device (it would hang the frame clock)</li>
+        <li>use a pulled slot: <code>fb</code>, <code>judge</code>, <code>radio</code></li>
+      </ul></div>
+    </div>
+    <p class="verb__rules">rules: path-escape · fs-path · fs-cap · slot-pulled · read-payload</p>
+  </section>
+
+  <section class="verb" id="v-write" role="tabpanel" aria-labelledby="t-write">
+    <h3>WRITE</h3>
+    <p class="verb__form">WRITE fs &lt;path&gt; &lt;one line&gt;</p>
+    <div class="verb__grid">
+      <div><h4>May touch</h4><ul>
+        <li><code>hold/</code> (quarantine) and <code>proposed/</code> (drafts)</li>
+        <li>one line per step, written atomically (temp + rename)</li>
+        <li>within the session's hold quota: 64 KiB and 256 entries of growth</li>
+      </ul></div>
+      <div class="no"><h4>Must not</h4><ul>
+        <li>write Ring 0: <code>main/</code>, <code>tests/rom/</code>, <code>tools/</code>, <code>sessions/</code></li>
+        <li>mint the owner's token</li>
+        <li>follow a planted symlink out of the world</li>
+      </ul></div>
+    </div>
+    <p class="verb__rules">rules: write-ring · path-escape · fs-cap · hold-bytes · hold-files</p>
+  </section>
+
+  <section class="verb" id="v-exec" role="tabpanel" aria-labelledby="t-exec">
+    <h3>EXEC</h3>
+    <p class="verb__form">EXEC tools/&lt;name&gt;.py &lt;args&gt;</p>
+    <div class="verb__grid">
+      <div><h4>May touch</h4><ul>
+        <li>run a crowned program in <code>tools/</code>, with up to 16 relative args</li>
+        <li>as a worker that sees only the world; it writes only <code>hold/</code>, <code>proposed/</code>, <code>tests/proposed/</code></li>
+        <li>for at most <code>T_tool</code> (5 s); 4096 bytes of output count</li>
+      </ul></div>
+      <div class="no"><h4>Must not</h4><ul>
+        <li>run anything outside <code>tools/*.py</code> — drafts wait for the crown</li>
+        <li>reach the network, mount, trace, or open io_uring (the worker is killed)</li>
+        <li>read outside the world: <code>/etc</code>, <code>$HOME</code>, <code>/proc</code> are not in its view</li>
+      </ul></div>
+    </div>
+    <p class="verb__rules">rules: exec-prog · exec-arg · exec-argc · sandbox · t-tool · tty-cap · out-ceil · worker-setup</p>
+  </section>
+
+  <section class="verb" id="v-test" role="tabpanel" aria-labelledby="t-test">
+    <h3>TEST</h3>
+    <p class="verb__form">TEST PURE|SCALAR tests/rom/&lt;test&gt;.py</p>
+    <div class="verb__grid">
+      <div><h4>May touch</h4><ul>
+        <li>run a crowned ROM test (Ring 0 muscle) in a worker</li>
+        <li>scratch in a private <code>/tmp</code> that vanishes with the worker</li>
+      </ul></div>
+      <div class="no"><h4>Must not</h4><ul>
+        <li>run a draft: only <code>tests/rom/</code>, whose hash is baked at build</li>
+        <li>move <code>main/</code>, ROM, prior snapshots or the token — the view refuses it, and the frame hashes before and after; anything moved disarms the run</li>
+        <li>use <code>JUDGE</code> or <code>VISUAL</code>: those slots are pulled</li>
+      </ul></div>
+    </div>
+    <p class="verb__rules">rules: test-path · test-kind · test-shape · test-moved · judge-pulled · visual-pulled</p>
+  </section>
+
+  <section class="verb" id="v-wait" role="tabpanel" aria-labelledby="t-wait">
+    <h3>WAIT</h3>
+    <p class="verb__form">WAIT &lt;ms&gt;</p>
+    <div class="verb__grid">
+      <div><h4>May touch</h4><ul>
+        <li>time only, up to <code>T_tool</code> (5000 ms); the evidence records what it slept</li>
+        <li>it is a step: framed, counted against <code>N</code>, snapshotted</li>
+      </ul></div>
+      <div class="no"><h4>Must not</h4><ul>
+        <li>wait on I/O or a gate — the spec's wider <code>wait</code> is not in this tree</li>
+        <li>outlive a KILL: the owner's stop ends the sleep</li>
+      </ul></div>
+    </div>
+    <p class="verb__rules">rules: wait-shape · t-tool · kill</p>
+  </section>
+</div>
+
+<h2>One step, as it runs</h2>
+<figure class="figure figure--scroll">
+  <div class="figure__frame">
+    <a class="figure__open" href="{{ '/assets/diagrams/frame.svg' | relative_url }}" aria-label="Open the diagram full size">
+    <picture>
+      <img src="{{ '/assets/diagrams/frame.svg' | relative_url }}" width="1318" height="979"
+       alt="Sequence of one frame: the intern hands bench one verb; bench parses it, checks the gate (KILL file, token unchanged), asks the helper FRAME_OK; for a TEST it hashes main, ROM, sessions and token; it forks the jailed worker and reads its output; for a TEST it hashes again and disarms if anything moved; it checks the hold quotas; it writes the sealed snapshot with evidence and rule, and out-n pinned by sha256; on a fault it stops after the snap.">
+    </picture>
+    </a>
+  </div>
+  <p class="figure__hint">Swipe sideways to read · tap to open full size</p>
+  <figcaption>A step that did not snap did not happen. <code>T_frame</code> (200 ms) is bench's own work; <code>T_tool</code> (5 s) is the worker's.</figcaption>
+</figure>
+
+<h2>Rings and the crown</h2>
+<figure class="figure figure--scroll">
+  <div class="figure__frame">
+    <a class="figure__open" href="{{ '/assets/diagrams/rings.svg' | relative_url }}" aria-label="Open the diagram full size">
+    <picture>
+      <source media="(max-width: 640px)" srcset="{{ '/assets/diagrams/rings-tall.svg' | relative_url }}">
+      <img src="{{ '/assets/diagrams/rings.svg' | relative_url }}" width="1554" height="307"
+       alt="Ring 0, the owner's: main, tests/rom, tools, sessions. Quarantine, the intern's under quotas: hold, proposed and tests/proposed. The intern writes quarantine through WRITE and EXEC tools; its attempts on Ring 0 are refused (rule=write-ring, EROFS in workers). The crown moves a draft from proposed into Ring 0: the owner moves the file and make bakes a new ROM hash.">
+    </picture>
+    </a>
+  </div>
+  <p class="figure__hint">Swipe sideways to read · tap to open full size</p>
+  <figcaption>The crown is a human act. <code>bench run</code> refuses a ROM that changed since the build.</figcaption>
+</figure>
+
+<p class="caption">Full text: <a href="{{ site.repo }}/blob/HEAD/docs/architecture.md">architecture.md</a> ·
+behavior reference: <a href="{{ '/reference.html' | relative_url }}">reference</a> ·
+owner commands: <a href="{{ '/start/' | relative_url }}">Start</a>.</p>

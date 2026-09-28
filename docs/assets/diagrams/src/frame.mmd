@@ -1,0 +1,27 @@
+%% SPDX-License-Identifier: MIT OR Apache-2.0
+%% source for docs/assets/diagrams/frame.svg (regenerate: see README.md in this folder)
+sequenceDiagram
+    autonumber
+    participant I as intern (script line)
+    participant B as bench (frame)
+    participant H as bench-helper
+    participant W as worker child
+    participant S as sessions/ID/
+
+    I->>B: one verb, e.g. EXEC tools/hash.py hold/out.txt
+    Note over B: parse: five verbs only, else FAULT + rule=
+    B->>B: gate: KILL file? token unchanged since arm?
+    B->>H: FRAME_OK n
+    H-->>B: yes (or no: disarmed, stop, no snap)
+    opt TEST step
+        B->>B: hash main/, ROM, sessions, token (before)
+    end
+    B->>W: fork: world-only view, landlock, seccomp, knife at T_tool
+    W-->>B: stdout + stderr (pipe), exit status
+    opt TEST step
+        B->>B: hash again, anything moved = disarm
+    end
+    B->>B: hold/ quotas (bytes, entries)
+    B->>S: snap-k/ (MANIFEST with evidence + rule=, INDEX, hold/), sealed, board=sha256
+    B->>S: out-n pinned by sha256, plus a log line
+    Note over B: fault = stop after the snap, ok = next line

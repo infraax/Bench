@@ -1,0 +1,94 @@
+---
+title: Start
+nav: start
+permalink: /start/
+description: Clone, check the machine, run the full gate, arm a world, read the lamps.
+---
+<h1>Start</h1>
+<p class="board__line">Linux, a compiler, Python — then one command.</p>
+
+<ol class="steps">
+  <li>
+    <h3>Check the machine</h3>
+    <p><strong>Linux only</strong> (seccomp, landlock ≥ 5.13, mount and user namespaces). A C11
+    compiler, <code>make</code>, Python 3.10+ (stdlib only), <code>git</code>.</p>
+    <div class="copyable">
+<pre><code>sudo apt-get install -y build-essential python3 git
+git clone https://github.com/infraax/Bench bench && cd bench
+make env            # machine card; exits 2 with the install line if something is missing</code></pre>
+    </div>
+  </li>
+  <li>
+    <h3>Run the full gate into the ledger</h3>
+    <div class="copyable">
+<pre><code>make ledger-test    # make test, logged to ledger/&lt;stamp&gt;-&lt;sha&gt;/; prints only a summary</code></pre>
+    </div>
+    <p>It prints a short summary — exit code, ROM and harness counts — and the path to the full
+    log. Paste the summary, not the log. <code>make test-rom</code> is the smaller gate (bus + ROM,
+    no worker children) that hosted CI runs; it never replaces the ledger.</p>
+  </li>
+  <li>
+    <h3>Arm a world and run five verbs</h3>
+    <div class="copyable">
+<pre><code>make
+: > sessions/OWNER_TOKEN      # arm: yours, a regular file; rm it to disarm
+echo hello > main/hello.txt
+printf 'READ fs main/hello.txt\nWRITE fs hold/out.txt hi\nEXEC tools/hash.py hold/out.txt\n' > touch.ops
+./supervisor/bench run touch.ops
+./supervisor/bench status --line
+./supervisor/bench verify</code></pre>
+    </div>
+    <p>The token is re-checked before every frame, by bench and by the helper. Removing or touching
+    it stops the next step. The intern cannot create it.</p>
+  </li>
+  <li>
+    <h3>Read the lamps</h3>
+    <table>
+      <thead><tr><th>Lamp</th><th>Lit means</th></tr></thead>
+      <tbody>
+        <tr><td><span class="lamp" aria-hidden="true"></span> MAIN</td><td>a crowned change reached <code>main/</code> — dark in this tree</td></tr>
+        <tr><td><span class="lamp lamp--hold" aria-hidden="true"></span> HOLD</td><td>work sits in quarantine, <code>hold/</code></td></tr>
+        <tr><td><span class="lamp lamp--lit" aria-hidden="true"></span> BLIND</td><td>framebuffer and radio both pulled — always, in foundation</td></tr>
+      </tbody>
+    </table>
+    <p>MAIN and HOLD are never lit together.</p>
+  </li>
+</ol>
+
+<h2>Owner commands</h2>
+<table>
+  <thead><tr><th>Command</th><th>Does</th></tr></thead>
+  <tbody>
+    <tr><td><code>bench run &lt;script&gt;</code></td><td>frame each line; snapshot after each step</td></tr>
+    <tr><td><code>bench status [--line]</code></td><td>the board: session, lamps, snap, n/N</td></tr>
+    <tr><td><code>bench kill</code></td><td>stop the running session now; the cut step is snapped</td></tr>
+    <tr><td><code>bench verify [snap]</code></td><td>re-hash stored snapshots against <code>board=</code></td></tr>
+    <tr><td><code>bench restore &lt;snap&gt;</code></td><td>load a verified snapshot as a new session</td></tr>
+    <tr><td><code>bench fork &lt;snap&gt; &lt;dir&gt;</code></td><td>a new, unarmed world from a verified snapshot</td></tr>
+    <tr><td><code>bench rules</code></td><td>every refusal rule and its one-line fix</td></tr>
+  </tbody>
+</table>
+
+<h2>Exit codes</h2>
+<table>
+  <thead><tr><th>Code</th><th>Meaning</th></tr></thead>
+  <tbody>
+    <tr><td>0</td><td>ok</td></tr>
+    <tr><td>1</td><td>fault — a step was refused or failed; read the <code>rule=</code> line</td></tr>
+    <tr><td>2</td><td>usage</td></tr>
+    <tr><td>3</td><td>killed</td></tr>
+    <tr><td>4</td><td>ROM changed since the build — rebuild with <code>make</code></td></tr>
+    <tr><td>5</td><td>not armed, or disarmed mid-run</td></tr>
+    <tr><td>6</td><td>helper missing, silent, lost or wrong version</td></tr>
+    <tr><td>7</td><td>world busy — another run holds the lock</td></tr>
+  </tbody>
+</table>
+
+<div class="note"><strong>Agents:</strong> run <code>make env &amp;&amp; make ledger-test</code> before inventing work,
+and report the summary. Five verbs only; <code>spec/</code> meaning is frozen; never put tokens or
+<code>sessions/</code> contents in the ledger, a commit, or a chat.</div>
+
+<p class="caption">More: <a href="{{ '/handbook.html' | relative_url }}">handbook</a> ·
+<a href="{{ '/agent.html' | relative_url }}">agent sessions</a> ·
+<a href="{{ '/ci.html' | relative_url }}">CI</a> ·
+<a href="{{ '/reference.html' | relative_url }}">full reference</a>.</p>
