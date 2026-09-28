@@ -53,8 +53,13 @@ class World:
     def __init__(self):
         self.root = Path(tempfile.mkdtemp(prefix="bench-h-"))
         ign = shutil.ignore_patterns("__pycache__", "bench", "bench-helper", "bus_test", "romhash", "*.o")
-        for d in ("supervisor", "tools", "isa"):
+        for d in ("tools", "isa"):
             shutil.copytree(IMAGE / d, self.root / d, ignore=ign)
+        # a world reads one file from supervisor/: the lamp-byte header peek.py decodes. the
+        # binaries run from the image; the sources are not world state. (was: all of supervisor/,
+        # ~2x the per-world setup cost.)
+        (self.root / "supervisor").mkdir()
+        shutil.copy2(IMAGE / "supervisor" / "woz_bus.h", self.root / "supervisor" / "woz_bus.h")
         shutil.copytree(IMAGE / "tests" / "rom", self.root / "tests" / "rom", ignore=ign)
         for d in ("main", "hold", "sessions", "tests/proposed"):
             (self.root / d).mkdir(parents=True, exist_ok=True)
