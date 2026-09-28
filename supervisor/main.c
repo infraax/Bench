@@ -60,6 +60,17 @@ static const char *KIND_NAME[] = {"PURE", "SCALAR", "JUDGE", "VISUAL"};
 
 static void on_signal(int sig) { (void)sig; g_halt = 1; }
 
+/* SIGTERM/SIGINT set g_halt; the next gate halts. installed BEFORE a command takes the world
+   lock, so a `bench kill` aimed at the lock holder never finds it on the default action (a
+   death mid-setup, with no state written). */
+static void halt_on_signals(void) {
+    struct sigaction sa;
+    memset(&sa, 0, sizeof sa);
+    sa.sa_handler = on_signal;
+    sigaction(SIGTERM, &sa, NULL);
+    sigaction(SIGINT, &sa, NULL);
+}
+
 static int ev(Session *s, int rc, const char *fmt, ...) {
     va_list ap;
     va_start(ap, fmt);
@@ -805,6 +816,7 @@ static int cmd_run(int argc, char **argv) {
     int lock_fd = -1;
     pid_t holder;
     if (sessions_path(lp, sizeof lp, NULL) || mkdirs(lp)) { fprintf(stderr, "run: no sessions dir\n"); return 1; }
+    halt_on_signals();
     int lk = lock_take(&lock_fd, &holder);
     if (lk != 0) {
         if (lk == -1) fprintf(stderr, "run: world busy — another run holds sessions/LOCK (pid %d). no frames ran.\n", (int)holder);
@@ -881,12 +893,6 @@ static int cmd_run(int argc, char **argv) {
         strncat(text, one, sizeof text - strlen(text) - 1);
     }
     if (path_join(path, sizeof path, dir, "OPS") || write_atomic(path, text)) return 1;
-
-    struct sigaction sa;
-    memset(&sa, 0, sizeof sa);
-    sa.sa_handler = on_signal;
-    sigaction(SIGTERM, &sa, NULL);
-    sigaction(SIGINT, &sa, NULL);
 
     static Session s;
     if (session_start(&s, g_root, dir, (uint32_t)n, (uint32_t)n, 0, 0, 0, hold_quota, hold_files)) {
@@ -967,7 +973,20 @@ static int cmd_kill(void) {
     /* a live demo is proven by its own lock, like a run by the world lock */
     pid_t demo = lock_holder_at("DEMO");
     if (demo > 0) { kill(demo, SIGTERM); printf("KILL demo pid %d\n", (int)demo); }
-    if (current_dir(dir, sizeof dir, id, sizeof id)) {
+    /* the world lock names the live run (or restore); a PID file only says who it was. */
+    pid_t holder = lock_holder(), pid = 0;
+    int cur = current_dir(dir, sizeof dir, id, sizeof id) == 0;
+    if (cur && path_join(path, sizeof path, dir, "PID") == 0 && read_small(path, buf, sizeof buf) == 0)
+        pid = (pid_t)atoi(buf);
+    if (holder > 0 && pid != holder) {
+        /* a run between taking the lock and naming itself in CURRENT/PID: CURRENT still names the
+           previous session. marking that one killed would miss the live run and mislabel a
+           finished session, so signal the proven holder; it halts at its first gate. */
+        kill(holder, SIGTERM);
+        printf("KILL pid %d (holds the world lock; no session of its own yet)\n", (int)holder);
+        return 0;
+    }
+    if (!cur) {
         if (demo > 0) return 0;
         fprintf(stderr, "kill: no session\n");
         return 1;
@@ -975,13 +994,9 @@ static int cmd_kill(void) {
     if (path_join(path, sizeof path, dir, "KILL") || write_atomic(path, "KILL\n")) return 1;
     /* signal only the live run: the PID file must name the process holding the world lock.
        a PID file left by a crash names nobody we may signal — that number may be reused. */
-    if (path_join(path, sizeof path, dir, "PID") == 0 && read_small(path, buf, sizeof buf) == 0) {
-        pid_t pid = (pid_t)atoi(buf), holder = lock_holder();
-        if (pid > 0 && holder == pid) kill(pid, SIGTERM);
-        else if (pid > 0)
-            printf("kill: pid %d does not hold the world lock (%s) — not signalled\n", (int)pid,
-                   holder ? "another run holds it" : "no live run");
-    }
+    if (pid > 0 && holder == pid) kill(pid, SIGTERM);
+    else if (pid > 0)
+        printf("kill: pid %d does not hold the world lock (no live run) — not signalled\n", (int)pid);
     sn[0] = 0;
     if (path_join(path, sizeof path, dir, "STATE") == 0 && read_small(path, buf, sizeof buf) == 0)
         kv(buf, "snap", sn, sizeof sn);
@@ -1013,15 +1028,11 @@ static int cmd_demo(void) {
     int lock_fd = -1;
     pid_t holder;
     if (sessions_path(sp, sizeof sp, NULL) || mkdirs(sp)) return 1;
+    halt_on_signals();
     if (lock_take_at("DEMO", &lock_fd, &holder) != 0) {
         fprintf(stderr, "demo: already running (pid %d)\n", (int)holder);
         return 7;
     }
-    struct sigaction sa;
-    memset(&sa, 0, sizeof sa);
-    sa.sa_handler = on_signal;
-    sigaction(SIGTERM, &sa, NULL);
-    sigaction(SIGINT, &sa, NULL);
     unsigned roms = rom_files();
     uint32_t knife = T_TOOL_DEMO_MS * (roms ? roms : 1);
     fprintf(stderr, "demo: roms=%u knife=%ums\n", roms, knife);
@@ -1084,6 +1095,7 @@ static int cmd_restore(int argc, char **argv) {
     int lock_fd = -1;
     pid_t holder;
     if (sessions_path(lp, sizeof lp, NULL) || mkdirs(lp)) return 1;
+    halt_on_signals();   /* a kill does not cut a restore in half; no frames follow it anyway */
     if (lock_take(&lock_fd, &holder) != 0) {
         fprintf(stderr, "restore: world busy — sessions/LOCK held (pid %d)\n", (int)holder);
         return 7;

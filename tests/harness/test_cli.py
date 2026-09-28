@@ -491,6 +491,9 @@ for line in c.makefile("rb"):
     if a == "SLEEP":
         time.sleep(10)
         break
+    if a.startswith("PAUSE:"):          # answer late, inside the budget
+        time.sleep(0.3)
+        a = a[6:]
     if a.startswith("DRIBBLE:"):
         for ch in (a[8:] + "\\n").encode():
             c.sendall(bytes([ch]))
@@ -1541,6 +1544,34 @@ class TestMailbox(unittest.TestCase):
         self.assertEqual(r.returncode, 6, r.stdout)
         self.assertIn("helper-lost", r.stdout)
         self.assertLess(time.monotonic() - t0, 4, "the answer budget restarted per byte")
+
+    def test_kill_during_session_start_halts_the_new_run(self):
+        # between taking the world lock and naming itself in CURRENT, a run is invisible to the
+        # PID file. kill must reach it through the lock, and leave the finished session alone.
+        w = addWorld(self)
+        self.assertEqual(w.bench("run", w.script("WAIT 1\n")).returncode, 0)
+        old = w.session()
+        exe = self.bench_with_helper(w, {"PING": "PING yes helper v0",
+                                         "ARM_OK": "PAUSE:ARM_OK yes ok",
+                                         "FRAME_OK": "FRAME_OK yes armed"})
+        proc = subprocess.Popen([str(exe), "run", w.script("WAIT 1\n" * 3)], cwd=IMAGE, env=w.env,
+                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        self.addCleanup(lambda: proc.poll() is None and proc.kill())
+        sessions = w.root / "sessions"
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            if sum(1 for d in sessions.iterdir() if d.is_dir()) >= 2:
+                break
+            time.sleep(0.01)
+        r = w.bench("kill")
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertIn("holds the world lock", r.stdout)
+        out, _ = proc.communicate(timeout=15)
+        self.assertEqual(proc.returncode, 3, out)
+        self.assertNotIn("frame 1", out)
+        self.assertNotEqual(w.session(), old)
+        self.assertEqual((w.state()["status"], w.state()["n"]), ("halt", "0"))
+        self.assertFalse((old / "KILL").exists(), "kill marked the finished session")
 
     def test_helper_refusing_arm_stops_start(self):
         w = addWorld(self)
