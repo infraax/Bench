@@ -1,5 +1,47 @@
 # NOTES
 
+## Session 6 — measurement and hygiene (no worker-policy change)
+
+### Start
+
+- Branch `claude/handoff-start-004f8n` at `a639e09`. Sessions 1–5 confirmed in the log.
+  `make test`: 55 ROM + 139 harness, green ×3 (18.8 / 21.5 / 23.2 s).
+
+### Shipped
+
+| Commit | What |
+|---|---|
+| `3f05992` | `tests/perf/perf_map.py`: timing classes, N=20, median + p95 |
+| `293dd0c` | `docs/PERF_AND_MAP.md`: process map, timings, test reliability, dead weight, PRISM-shaped edits |
+| `817b895` | worker finds `python3` on its own PATH (README and code now agree) |
+| `381e80b` | worker that never started → `rule=worker-setup` (CLOEXEC status pipe); a tool's `exit(125)` stays its own |
+| `89cf948` | `fork` copies `supervisor/woz_bus.h`: `peek.py` works in fork worlds |
+| `f17444d` | `TestPostconditionBackstop`: layer 2 driven from outside the child; mutation-checked |
+| `3e6704c` | one `snap_ref()` for restore / verify / fork (−19 lines) |
+| `f06a439` | stale comments and README snap numbers; dead `(void)op` |
+| `623dd9d` | harness worlds copy only `woz_bus.h` (World() 24.7 → 11.4 ms) |
+| `0d40c07` | `docs/TEST_BUDGET.md` |
+
+No filter entries, no namespace types, no helper words, no verb. `spec/` untouched.
+
+### End
+
+- `make test` 23 runs before the changes, 0 flakes. After: 55 ROM + 146 harness, green ×3
+  (20.7 / 21.0 / 20.9 s).
+- `make e2e`, `make perf` green.
+
+### Owner-gated later (listed, not implemented this session)
+
+- **Separate process-id namespace for workers.** A tool can signal same-uid processes, bench
+  included. Needs a double fork in `child_run`. Worker-policy change: owner call.
+- **Unprivileged uid for workers when bench runs as root.** Same class: worker policy.
+- **Prerequisite blocks proposed in PERF_AND_MAP §E:** `EXEC tools/<missing>.py` refused before the
+  fork (`rule=exec-missing`); `WAIT` over `T_tool` refused at parse. Both change when a refusal
+  happens; owner call.
+- **`frame_ms=` in the MANIFEST** so snap cost is read, not derived from wall clocks.
+- **Test structure (TEST_BUDGET):** fold 9 duplicate `FIXTURES` rows into `OPS_TABLE`; a harness
+  `SYSCALL_TABLE`; `repeats=` on the five wall-clock asserts; then parallel classes (~22 → ~8 s).
+
 ## Session 5 — handoff tasks 1–6 (comparison, plan, refusals, fork, io_uring, namespaces)
 
 ### Start
@@ -24,20 +66,19 @@
 - `make test`: bus ok, 55 ROM, 139 harness. `make e2e` green. `make perf` green.
 - Namespaces checked by hand as uid 65534 (the user-namespace path); the harness runs as root.
 
-### Left open
+### Left open (status after session 6 in brackets)
 
-- **Post-conditions are now unreachable by test.** The namespace refuses every move a `TEST` could
-  make, so the frame's post-condition code (layer 2) is no longer exercised by the harness. Kept as
-  the backstop; a test for it would need a way past layer 1.
+- **Post-conditions are now unreachable by test.** [closed `f17444d`: driven from outside the child]
 - **No PID namespace.** A tool can signal same-uid processes, bench included. Needs a double fork
-  in `child_run` (the exec'd process must be the new namespace's child).
+  in `child_run` (the exec'd process must be the new namespace's child). [owner-gated, session 6]
 - **`execvpe` searches bench's PATH, not the tool env's** (glibc uses the caller's `environ`). The
   README's "fixed PATH" holds for the child's env, not for finding `python3`. Resolve the interpreter
-  once, at build or start, and exec it by absolute path.
+  once, at build or start, and exec it by absolute path. [closed `817b895`]
 - **`rc=125` (jail could not be built) has no rule id.** A tool exiting 125 looks the same. Give
-  setup failure its own return from `child_run`, like `-5` for SIGSYS.
+  setup failure its own return from `child_run`, like `-5` for SIGSYS. [closed `381e80b`]
 - **`tools/peek.py` in a forked world**: it reads `supervisor/woz_bus.h` from the world, which a fork
   does not copy (binaries are used by path). Copy the header, or have peek take the bus from `bench`.
+  [closed `89cf948`]
 
 ## Session 4 — hardening + adversarial pass
 

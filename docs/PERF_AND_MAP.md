@@ -48,6 +48,10 @@ Files that carry state: `sessions/LOCK` (who owns the frame clock), `sessions/CU
 | EXEC tiny | `tool_ms` of that child (fork + jail + python boot + hash) | 32 | 42 | 180 |
 | worker jail | `/bin/true`: bare → namespaces → full jail (µs) | 1345 → 2091 → 2542 | — | 50 |
 | worker jail | `python3 -S -c pass`: bare → full jail (µs) | 9062 → 10175 | — | 50 |
+
+The python row is within noise: a second `make perf` gave 11054 → 11133 µs (and a negative
+"ns only" delta). Quote the jail cost from the `/bin/true` row: +0.5–0.8 ms namespaces,
++1.1–1.2 ms full.
 | snap | marginal frame, hold = 0 files | 0.59 | 1.08 | 20 |
 | snap | marginal frame, hold = 1 × 64 KiB | 1.78 | 2.68 | 20 |
 | snap | marginal frame, hold = 256 × 1 B (unchanged → linked) | 10.5 | 15.4 | 20 |
@@ -158,8 +162,9 @@ deterministic, testable outcome — not by average improvement. Capped at 12, no
 | 11 | timing asserts sampled with `repeats=` | test reliability | harness | none today (0/23 flaked) | small |
 | 12 | `hold/` hash cost: reuse `INDEX` to skip re-hashing unchanged files | performance | `frame.c` | none: 42 ms at 1000 files ≪ 200 ms | ~60 lines — **not justified yet** |
 
-Done this session: 1, 2, 3, 4, 5, 6. Proposed for the owner: 7, 8, 10. Left: 9, 11 (see
-`TEST_BUDGET.md`), 12 (numbers do not justify it).
+Done this session: 1 `817b895`, 2 `381e80b`, 3 `89cf948`, 4 `f17444d`, 5 `3e6704c`, 6 `f06a439`,
+9 `623dd9d`. Proposed for the owner: 7, 8, 10. Left: 11 (see `TEST_BUDGET.md`), 12 (numbers do
+not justify it).
 
 ---
 
