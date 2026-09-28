@@ -1,17 +1,20 @@
 # SPDX-License-Identifier: MIT OR Apache-2.0
 #
 # One check, on every push (no timer, no duplicate pull_request run): the build and the algebra.
-# `make all` (C, -Werror) and `make test-rom` (exhaustive bus test + Ring-0 ROM suite).
+# `make all` (C, -Werror), `make test-rom` (exhaustive bus test + Ring-0 ROM suite) and
+# `make site-check` (the site's rule data and playground parser agree with refusal.c and ROM).
 #
 # It does NOT run the full `make test`: the harness starts worker children whose view (mount/user
 # namespaces, landlock, seccomp) needs a Linux box that can build it; a hosted runner is not that
 # box by default, and this workflow does not loosen it. The full gate is `make ledger-test` on
 # such a box; its ledger row is the record. See docs/ci.md.
 #
-# No `uses:` steps on purpose: earlier runs using actions/checkout and actions/upload-artifact were
-# rejected before a runner was assigned (runner_id 0, no logs) while GitHub's own Pages build ran
-# fine — the signature of a repository actions policy that does not allow third-party actions.
-# Plain git + make needs no action at all.
+# No `uses:` steps: plain git + make needs no third-party action, so nothing to pin or allow-list.
+#
+# If a run fails in seconds with no steps and no logs, read the run page's annotation: on
+# 2026-09-28 it said "The job was not started because your account is locked due to a billing
+# issue." That is an account setting (Settings -> Billing and plans), not this file. GitHub's own
+# Pages build still runs while user workflows are blocked. See docs/github.md.
 name: check
 
 on:
@@ -22,7 +25,7 @@ permissions:
 
 jobs:
   rom-and-compile:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04   # pinned: ubuntu-latest moves to Ubuntu 26 from 2026-10-19
     timeout-minutes: 10
     steps:
       - name: checkout (plain git, no action)
@@ -38,6 +41,8 @@ jobs:
         run: scripts/ledger-run.sh make all
       - name: ROM and bus (make test-rom)
         run: scripts/ledger-run.sh make test-rom
+      - name: site data and playground parity (make site-check)
+        run: scripts/ledger-run.sh make site-check
       - name: full logs on failure
         if: failure()
         run: for f in ledger/latest/*.txt; do echo "::group::$f"; cat "$f"; echo "::endgroup::"; done
