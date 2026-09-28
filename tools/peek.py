@@ -34,7 +34,11 @@ def lit(lamp_byte, lamps):
 if __name__ == "__main__":
     world = sys.argv[1] if len(sys.argv) > 1 else os.environ.get("BENCH_ROOT", ".")
     lamps, slots = woz_bits()
-    st = state(world)
+    try:
+        st = state(world)
+    except FileNotFoundError:
+        print("lamps=0x00 (dark) session=none")   # no run yet in this world: the board is dark
+        sys.exit(0)
     byte = int(st["lamps"], 16)
     plug = int(st["plug"], 16)
     print(f"lamps=0x{byte:02x} {' '.join(lit(byte, lamps)) or '(dark)'}")
