@@ -11,7 +11,8 @@ owner ──arms──▶ bench run ──frames──▶ READ · WRITE · EXEC 
                   └─ helper (veto)        workers see only the world; main/ and ROM are read-only
 ```
 
-Product tip: `main` (see [`docs/RELEASE.md`](docs/RELEASE.md)). License: **MIT OR Apache-2.0**.
+Product tip: branch `claude/handoff-start-004f8n`; the default branch is the owner's setting
+(see [`docs/RELEASE.md`](docs/RELEASE.md)). License: **MIT OR Apache-2.0**.
 
 ## Requirements
 
@@ -25,12 +26,14 @@ Product tip: `main` (see [`docs/RELEASE.md`](docs/RELEASE.md)). License: **MIT O
 ```
 git clone <this repo> bench && cd bench
 make env            # machine card -> ledger/latest/ENV.txt; exits 2 with the install line if something is missing
-make test           # bus, ROM, harness — offline
-make ledger-test    # the same, logged to ledger/<stamp>-<sha>/; prints only a summary
+make test-rom       # bus + ROM only: pure, no worker children (what hosted CI runs)
+make test           # bus, ROM, harness with worker children — offline, the full gate
+make ledger-test    # the full gate, logged to ledger/<stamp>-<sha>/; prints only a summary
 ```
 
-**Agents:** run `make env`, then `make ledger-test`, before inventing work, and paste the summary,
-not the log. See [`docs/agent.md`](docs/agent.md).
+**Agents on a Linux laptop or box:** `make env && make ledger-test` before inventing work, and
+paste the summary, not the log. See [`docs/agent.md`](docs/agent.md). Hosted CI runs compile +
+`make test-rom` only; the full gate is the ledger — see [`docs/ci.md`](docs/ci.md).
 
 ## One run
 
@@ -82,6 +85,7 @@ in foundation). MAIN and HOLD are never lit together.
 - [`docs/compare.md`](docs/compare.md) — where Bench sits among agent harnesses
 - [`docs/TOOLBOX.md`](docs/TOOLBOX.md) · [`docs/EVOLUTION.md`](docs/EVOLUTION.md) · [`docs/DEVELOPMENT_PLAN.md`](docs/DEVELOPMENT_PLAN.md) — tools, roadmap, sprints
 - [`docs/PERF_AND_MAP.md`](docs/PERF_AND_MAP.md) · [`docs/TEST_BUDGET.md`](docs/TEST_BUDGET.md) — measured costs, test time
+- [`docs/ci.md`](docs/ci.md) — what hosted CI proves and what only the ledger proves
 - [`docs/history/`](docs/history/) — session notes and design reviews
 
 ## Not in this tree

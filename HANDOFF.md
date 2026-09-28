@@ -1,41 +1,42 @@
-# HANDOFF — 2026-09-28 (session 7: housekeeping)
+# HANDOFF — 2026-09-28 (session 8: CI split)
 
 One page. Facts, not a diary; history is in `docs/history/`.
 
 ## Head
 
-- Branch: `claude/handoff-start-004f8n` · pushed · product tip is described as `main` in the README;
-  GitHub's default branch has not been changed (owner call below)
-- Last green ledger row: `ledger/20260928-110052-1b1e863.1/summary.md` (local, gitignored)
-- `make test`: bus ok · ROM 55 · harness 146 · wall 22.1 s (via `make ledger-test`)
-- `make e2e`: green (session 6) · `make perf`: green (session 6)
-- CI run 1 (`bf68ec1`, run 36413183428): **failed before any step** — no runner was assigned
-  (runner_id 0, 3 s, no logs). Not the tests: Actions is off or out of minutes/billing for the account.
+- Branch: `claude/handoff-start-004f8n` (the product tip; the default branch is the owner's setting) · pushed
+- Code head before this file: `f038429`
+- Last green ledger rows (local, gitignored):
+  - `ledger/20260928-112345-f038429.1/summary.md` — `make test`: exit 0 · bus ok · ROM 55 · harness 146 · 17.7 s
+  - `ledger/20260928-112308-c26733f/summary.md` — `make test-rom`: exit 0 · bus ok · ROM 55 · 0.2 s
+- `make e2e`, `make perf`: green in session 6; not re-run (no code path they cover changed)
 
 ## Done this session
 
-- `96a2e86` legal: MIT OR Apache-2.0 (LICENSE, LICENSE-MIT, LICENSE-APACHE, NOTICE, THIRD_PARTY.md, SPDX lines)
-- `1642c41` docs: stranger's README; handbook, architecture, compare, agent, handoff template, RELEASE;
-  old README body → `docs/reference.md`; session docs → `docs/history/`; `research/` → `docs/research/`
-- `e1de9f2` scripts: `make env` (machine card) and `make ledger-test` (ledger row, summary only)
-- `bf68ec1` ci: Linux `make test` workflow; issue templates (bug, spec amendment, tool crown)
+- `c26733f` make: `test-rom` — bus test + ROM suite, no worker children
+- `f038429` ci: the hosted job is `rom-and-compile` (`make all`, `make test-rom`); it no longer claims the worker suite
+- `docs: ci split and handoff` — `docs/ci.md`; README, `docs/agent.md`, `docs/RELEASE.md` say which gate is where
+
+## Owner calls — decided
+
+- **Branch:** stay on `claude/handoff-start-004f8n`; no merge, no default-branch rename from a session.
+- **Actions:** the owner enables Actions / minutes in repository settings when hosted runs are
+  wanted. Sessions do not poll it. (Run 36413183428 failed with no runner assigned.)
+- **Hosted CI vs full suite:** hosted = compile + `test-rom`; full `make test` = the ledger on a
+  Linux box that runs the worker view. No sysctl / AppArmor / privileged-container changes.
+- **SPDX on `supervisor/sandbox.c`:** left off; the project license covers it.
+- **`main/` `hold/` `sessions/` at the root:** kept; they are the world's working dirs.
 
 ## Open owner calls
 
-- **Default branch.** Rename or point GitHub's default at `main` (repo settings); no history rewrite.
-- **Enable Actions / runner minutes** for `infraax/Bench`, then re-run run 36413183428.
-- **CI as non-root.** GitHub runners are not root; Ubuntu 24.04's AppArmor may refuse unprivileged
-  user namespaces, which makes every worker fail closed (`rule=worker-setup`). If the first run that gets a
-  runner is red for that reason, the options are: allow it on the runner
-  (`sysctl kernel.apparmor_restrict_unprivileged_userns=0` in the workflow), run the job as root in
-  a container, or accept Linux-root-only CI. Not decided here; `sandbox.c` untouched.
-- **SPDX on `supervisor/sandbox.c`** when that file is next opened.
+- A Linux machine (self-hosted runner or a box) that already runs the worker view, if the full
+  gate should run outside a session. Until then the ledger row is the record.
 
-## Leftover (owner-gated, from session 6)
+## Leftover (owner-gated, unchanged)
 
 - PID namespace and an unprivileged uid for workers — worker policy.
-- Prerequisite blocks: `EXEC` of a missing tool, `WAIT` over `T_tool` at parse; `frame_ms=` in MANIFEST.
-- Test structure from `docs/TEST_BUDGET.md` (fold duplicate FIXTURES, `repeats=`, parallel classes).
+- Prerequisite blocks (`EXEC` of a missing tool, `WAIT` over `T_tool` at parse); `frame_ms=` in MANIFEST.
+- Test structure from `docs/TEST_BUDGET.md`; the v1 toolbox (`docs/TOOLBOX.md`).
 
 ## Do not touch
 
