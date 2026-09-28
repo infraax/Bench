@@ -1,0 +1,19 @@
+---
+layout: null
+permalink: /api/index.json
+---
+{
+  "name": "Bench",
+  "what": "A custody kernel for agent work: five verbs, framed steps, sealed snapshots. Not an agent.",
+  "repository": {{ site.repo | jsonify }},
+  "built": {{ site.time | date_to_xmlschema | jsonify }},
+  "endpoints": {
+    "rules": {{ '/api/rules.json' | absolute_url | jsonify }},
+    "verbs": {{ '/api/verbs.json' | absolute_url | jsonify }},
+    "ops": {{ '/api/ops.json' | absolute_url | jsonify }},
+    "perf": {{ '/api/perf.json' | absolute_url | jsonify }},
+    "parser": {{ '/assets/js/ops-check.js' | absolute_url | jsonify }},
+    "llms": {{ '/llms.txt' | absolute_url | jsonify }}
+  },
+  "counts": { "rules": {{ site.data.rules | size }}, "ops_rows": {{ site.data.ops | size }}, "verbs": {{ site.data.verbs | size }} }
+}

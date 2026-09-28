@@ -70,6 +70,38 @@
     apply();
   }
 
+  /* rules: search box + phase filter */
+  var rl = document.querySelector("[data-rules]");
+  if (rl) {
+    var cards = rl.querySelectorAll(".rule"), q = rl.querySelector("[data-q]"),
+        phases = rl.querySelectorAll("[data-phase]:not(.rule)"), rc = rl.querySelector("[data-rcount]"), ph = "all";
+    var filt = function () {
+      var term = (q.value || "").toLowerCase().trim(), n = 0;
+      cards.forEach(function (c) {
+        var ok = (ph === "all" || c.dataset.phase === ph) && (!term || c.dataset.text.toLowerCase().indexOf(term) >= 0);
+        c.hidden = !ok; if (ok) n++;
+      });
+      rc.textContent = n + " of " + cards.length;
+    };
+    phases.forEach(function (b) {
+      b.addEventListener("click", function () {
+        ph = b.dataset.phase;
+        phases.forEach(function (x) { x.setAttribute("aria-pressed", x === b ? "true" : "false"); });
+        filt();
+      });
+    });
+    q.addEventListener("input", filt);
+    if (location.hash.length > 1 && document.getElementById(location.hash.slice(1))) q.value = "";
+    filt();
+  }
+
+  /* home: one line into the playground */
+  var tl = document.querySelector("[data-tryline]");
+  if (tl) tl.addEventListener("submit", function (e) {
+    e.preventDefault();
+    location.href = tl.action + "#s=" + encodeURIComponent(tl.querySelector("input").value);
+  });
+
   /* copy buttons on command blocks marked .copyable */
   document.querySelectorAll(".copyable pre").forEach(function (pre) {
     if (!navigator.clipboard) return;

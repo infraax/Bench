@@ -9,18 +9,24 @@ url: https://infraax.github.io
 baseurl: /Bench
 repo: https://github.com/infraax/Bench
 
+plugins:
+  - jekyll-sitemap   # on the GitHub Pages allow-list; writes /sitemap.xml
+
 markdown: kramdown
 kramdown:
   input: GFM
   hard_wrap: false
 
-# the five nav items, in order. `key` matches a page's `nav:` front matter.
+# the nav, in order. `key` matches a page's `nav:` front matter.
 nav:
   - { key: home, title: Home, url: / }
   - { key: architecture, title: Architecture, url: /architecture/ }
-  - { key: compare, title: Compare, url: /compare/ }
+  - { key: playground, title: Playground, url: /playground/ }
+  - { key: rules, title: Rules, url: /rules/ }
   - { key: measure, title: Measure, url: /measure/ }
+  - { key: compare, title: Compare, url: /compare/ }
   - { key: start, title: Start, url: /start/ }
+  - { key: agents, title: Agents, url: /agents/ }
 
 # every page gets the crypt layout, including the plain docs (handbook, reference, ...).
 defaults:

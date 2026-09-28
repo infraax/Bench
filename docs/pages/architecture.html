@@ -33,98 +33,22 @@ slot. Pick a verb:</p>
 
 <div class="explorer" data-explorer>
   <div class="explorer__tabs" role="tablist" aria-label="Verbs">
-    <button role="tab" id="t-read"  aria-controls="v-read"  aria-selected="true">READ</button>
-    <button role="tab" id="t-write" aria-controls="v-write" aria-selected="false">WRITE</button>
-    <button role="tab" id="t-exec"  aria-controls="v-exec"  aria-selected="false">EXEC</button>
-    <button role="tab" id="t-test"  aria-controls="v-test"  aria-selected="false">TEST</button>
-    <button role="tab" id="t-wait"  aria-controls="v-wait"  aria-selected="false">WAIT</button>
+    {% for v in site.data.verbs %}{% assign id = v.verb | downcase %}
+    <button role="tab" id="t-{{ id }}" aria-controls="v-{{ id }}" aria-selected="{% if forloop.first %}true{% else %}false{% endif %}">{{ v.verb }}</button>
+    {% endfor %}
   </div>
-
-  <section class="verb" id="v-read" role="tabpanel" aria-labelledby="t-read">
-    <h3>READ</h3>
-    <p class="verb__form">READ fs &lt;path&gt;</p>
+  {% for v in site.data.verbs %}{% assign id = v.verb | downcase %}
+  <section class="verb" id="v-{{ id }}" role="tabpanel" aria-labelledby="t-{{ id }}">
+    <h3>{{ v.verb }}</h3>
+    <p class="verb__form">{{ v.form | escape }}</p>
     <div class="verb__grid">
-      <div><h4>May touch</h4><ul>
-        <li>any regular file inside the world, through the <code>fs</code> slot</li>
-        <li>up to 4096 bytes; the bytes land in <code>out-n</code>, pinned by sha256</li>
-      </ul></div>
-      <div class="no"><h4>Must not</h4><ul>
-        <li>leave the world: no leading <code>/</code>, no <code>..</code>, no symlink followed</li>
-        <li>read a fifo, socket or device (it would hang the frame clock)</li>
-        <li>use a pulled slot: <code>fb</code>, <code>judge</code>, <code>radio</code></li>
-      </ul></div>
+      <div><h4>May touch</h4><ul>{% for x in v.may %}<li>{{ x }}</li>{% endfor %}</ul></div>
+      <div class="no"><h4>Must not</h4><ul>{% for x in v.must_not %}<li>{{ x }}</li>{% endfor %}</ul></div>
     </div>
-    <p class="verb__rules">rules: path-escape · fs-path · fs-cap · slot-pulled · read-payload</p>
+    <p class="verb__rules">rules: {% for r in v.rules %}<a href="{{ '/rules/' | relative_url }}#{{ r }}">{{ r }}</a>{% unless forloop.last %} · {% endunless %}{% endfor %}
+      · <a href="{{ '/playground/' | relative_url }}#s={{ v.example | uri_escape }}">try it</a></p>
   </section>
-
-  <section class="verb" id="v-write" role="tabpanel" aria-labelledby="t-write">
-    <h3>WRITE</h3>
-    <p class="verb__form">WRITE fs &lt;path&gt; &lt;one line&gt;</p>
-    <div class="verb__grid">
-      <div><h4>May touch</h4><ul>
-        <li><code>hold/</code> (quarantine) and <code>proposed/</code> (drafts)</li>
-        <li>one line per step, written atomically (temp + rename)</li>
-        <li>within the session's hold quota: 64 KiB and 256 entries of growth</li>
-      </ul></div>
-      <div class="no"><h4>Must not</h4><ul>
-        <li>write Ring 0: <code>main/</code>, <code>tests/rom/</code>, <code>tools/</code>, <code>sessions/</code></li>
-        <li>mint the owner's token</li>
-        <li>follow a planted symlink out of the world</li>
-      </ul></div>
-    </div>
-    <p class="verb__rules">rules: write-ring · path-escape · fs-cap · hold-bytes · hold-files</p>
-  </section>
-
-  <section class="verb" id="v-exec" role="tabpanel" aria-labelledby="t-exec">
-    <h3>EXEC</h3>
-    <p class="verb__form">EXEC tools/&lt;name&gt;.py &lt;args&gt;</p>
-    <div class="verb__grid">
-      <div><h4>May touch</h4><ul>
-        <li>run a crowned program in <code>tools/</code>, with up to 16 relative args</li>
-        <li>as a worker that sees only the world; it writes only <code>hold/</code>, <code>proposed/</code>, <code>tests/proposed/</code></li>
-        <li>for at most <code>T_tool</code> (5 s); 4096 bytes of output count</li>
-      </ul></div>
-      <div class="no"><h4>Must not</h4><ul>
-        <li>run anything outside <code>tools/*.py</code> — drafts wait for the crown</li>
-        <li>reach the network, mount, trace, or open io_uring (the worker is killed)</li>
-        <li>read outside the world: <code>/etc</code>, <code>$HOME</code>, <code>/proc</code> are not in its view</li>
-      </ul></div>
-    </div>
-    <p class="verb__rules">rules: exec-prog · exec-arg · exec-argc · sandbox · t-tool · tty-cap · out-ceil · worker-setup</p>
-  </section>
-
-  <section class="verb" id="v-test" role="tabpanel" aria-labelledby="t-test">
-    <h3>TEST</h3>
-    <p class="verb__form">TEST PURE|SCALAR tests/rom/&lt;test&gt;.py</p>
-    <div class="verb__grid">
-      <div><h4>May touch</h4><ul>
-        <li>run a crowned ROM test (Ring 0 muscle) in a worker</li>
-        <li>scratch in a private <code>/tmp</code> that vanishes with the worker</li>
-      </ul></div>
-      <div class="no"><h4>Must not</h4><ul>
-        <li>run a draft: only <code>tests/rom/</code>, whose hash is baked at build</li>
-        <li>move <code>main/</code>, ROM, prior snapshots or the token — the view refuses it, and the frame hashes before and after; anything moved disarms the run</li>
-        <li>use <code>JUDGE</code> or <code>VISUAL</code>: those slots are pulled</li>
-      </ul></div>
-    </div>
-    <p class="verb__rules">rules: test-path · test-kind · test-shape · test-moved · judge-pulled · visual-pulled</p>
-  </section>
-
-  <section class="verb" id="v-wait" role="tabpanel" aria-labelledby="t-wait">
-    <h3>WAIT</h3>
-    <p class="verb__form">WAIT &lt;ms&gt;</p>
-    <div class="verb__grid">
-      <div><h4>May touch</h4><ul>
-        <li>time only, up to <code>T_tool</code> (5000 ms); the evidence records what it slept</li>
-        <li>it is a step: framed, counted against <code>N</code>, snapshotted</li>
-      </ul></div>
-      <div class="no"><h4>Must not</h4><ul>
-        <li>wait on I/O or a gate — the spec's wider <code>wait</code> is not in this tree</li>
-        <li>outlive a KILL: the owner's stop ends the sleep</li>
-      </ul></div>
-    </div>
-    <p class="verb__rules">rules: wait-shape · t-tool · kill</p>
-  </section>
+  {% endfor %}
 </div>
 
 <h2>One step, as it runs</h2>

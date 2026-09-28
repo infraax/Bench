@@ -1,0 +1,65 @@
+---
+title: Agents
+nav: agents
+permalink: /agents/
+wide: true
+description: For AI agents and the people who run them — the session protocol, the grammar, and machine-readable endpoints.
+---
+<h1>Agents</h1>
+<p class="board__line">If you are a model reading this: here is how to work in a Bench world.</p>
+
+<div class="cols">
+  <div class="card">
+    <h3>What you are</h3>
+    <p>Inside a world you are the <strong>intern</strong>. You emit one line per step, one of five
+    verbs. You cannot arm the world, raise a budget, write <code>main/</code>, or run a program that
+    is not already crowned in <code>tools/</code>.</p>
+  </div>
+  <div class="card">
+    <h3>What you get back</h3>
+    <p>Each step's output is in <code>sessions/&lt;id&gt;/out-&lt;n&gt;</code>, pinned by sha256. A refusal
+    names a stable <code>rule=</code> and a one-line fix — act on the fix, do not retry the same line.</p>
+  </div>
+  <div class="card">
+    <h3>What you must not do</h3>
+    <p>Invent a sixth verb, touch the owner's token, paste tokens or <code>sessions/</code> contents
+    into a chat or commit, or treat a refused step as a flake.</p>
+  </div>
+</div>
+
+<h2>Grammar</h2>
+<pre class="sample"><code>script  := line*          ; at most 64 ops, each line &lt; 512 bytes
+line    := "#" comment | blank | op
+op      := READ  fs &lt;path&gt;                 ; path relative, no "..", no leading "/"
+         | WRITE fs &lt;hold/…|proposed/…&gt; &lt;one line&gt;
+         | EXEC  tools/&lt;name&gt;.py &lt;arg&gt;*    ; ≤ 16 args, each relative
+         | TEST  PURE|SCALAR tests/rom/&lt;t&gt;.py
+         | WAIT  &lt;ms&gt;                       ; 0 … 5000 (T_tool)
+budgets := N=8 frames · T_tool=5 s · T_frame=200 ms · hold +64 KiB / +256 entries · 4096 B output</code></pre>
+<p class="caption">Verbs are case-blind. Check a script before you run it in the <a href="{{ '/playground/' | relative_url }}">playground</a>.</p>
+
+<h2>Session protocol (repository work)</h2>
+<ol class="steps">
+  <li><h3>Machine card</h3><div class="copyable"><pre><code>make env</code></pre></div><p>Installs nothing; exits 2 with the install line if something is missing.</p></li>
+  <li><h3>Full gate, into the ledger</h3><div class="copyable"><pre><code>make ledger-test</code></pre></div><p>Report the printed summary and the log path — not the log.</p></li>
+  <li><h3>Read <code>HANDOFF.md</code></h3><p>Head, test counts, open owner calls, what not to touch.</p></li>
+  <li><h3>One concern per commit</h3><p><code>make test</code> green before every push; <code>spec/</code> meaning is frozen.</p></li>
+</ol>
+
+<h2>Machine-readable</h2>
+<table>
+  <thead><tr><th>Endpoint</th><th>What</th></tr></thead>
+  <tbody>
+    <tr><td><a href="{{ '/llms.txt' | relative_url }}"><code>/llms.txt</code></a></td><td>plain-text summary of the product and this site, for language models</td></tr>
+    <tr><td><a href="{{ '/api/index.json' | relative_url }}"><code>/api/index.json</code></a></td><td>index of the endpoints below, with the site version</td></tr>
+    <tr><td><a href="{{ '/api/rules.json' | relative_url }}"><code>/api/rules.json</code></a></td><td>every refusal rule: <code>id</code>, <code>phase</code>, <code>fix</code> — generated from <code>refusal.c</code></td></tr>
+    <tr><td><a href="{{ '/api/verbs.json' | relative_url }}"><code>/api/verbs.json</code></a></td><td>the five verbs: form, may touch, must not, rule ids, example</td></tr>
+    <tr><td><a href="{{ '/api/ops.json' | relative_url }}"><code>/api/ops.json</code></a></td><td>the ROM truth table: lines with their expected verdict and rule</td></tr>
+    <tr><td><a href="{{ '/api/perf.json' | relative_url }}"><code>/api/perf.json</code></a></td><td>measured timing classes (medians, p95) and the machine they came from</td></tr>
+    <tr><td><a href="{{ '/assets/js/ops-check.js' | relative_url }}"><code>/assets/js/ops-check.js</code></a></td><td>the parser mirror itself: <code>require()</code> it in node, <code>BenchOps.script(text)</code></td></tr>
+  </tbody>
+</table>
+<div class="copyable"><pre><code>curl -s {{ site.url }}{{ '/api/rules.json' | relative_url }}
+node -e 'const O=require("./ops-check.js");console.log(O.script("WRITE fs main/x hi\n").parseFault)'</code></pre></div>
+<p class="caption">Static files, no keys, no rate limits, no tracking. The binary on your machine is the authority;
+these files describe the tree at the commit that built this site.</p>

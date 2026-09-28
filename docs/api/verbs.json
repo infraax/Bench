@@ -1,0 +1,5 @@
+---
+layout: null
+permalink: /api/verbs.json
+---
+{{ site.data.verbs | jsonify }}

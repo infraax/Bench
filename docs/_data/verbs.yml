@@ -1,0 +1,58 @@
+# The five verbs, as the site and /api/verbs.json show them. Rule ids must exist in
+# supervisor/refusal.c (checked by tests/site/parity.mjs through make site-check).
+- verb: READ
+  form: "READ fs <path>"
+  may:
+    - "any regular file inside the world, through the <code>fs</code> slot"
+    - "up to 4096 bytes; the bytes land in <code>out-n</code>, pinned by sha256"
+  must_not:
+    - "leave the world: no leading <code>/</code>, no <code>..</code>, no symlink followed"
+    - "read a fifo, socket or device (it would hang the frame clock)"
+    - "use a pulled slot: <code>fb</code>, <code>judge</code>, <code>radio</code>"
+  rules: [path-escape, fs-path, fs-cap, slot-pulled, read-payload]
+  example: "READ fs main/hello.txt"
+- verb: WRITE
+  form: "WRITE fs <path> <one line>"
+  may:
+    - "<code>hold/</code> (quarantine) and <code>proposed/</code> (drafts)"
+    - "one line per step, written atomically (temp + rename)"
+    - "within the session's hold quota: 64 KiB and 256 entries of growth"
+  must_not:
+    - "write Ring 0: <code>main/</code>, <code>tests/rom/</code>, <code>tools/</code>, <code>sessions/</code>"
+    - "mint the owner's token"
+    - "follow a planted symlink out of the world"
+  rules: [write-ring, path-escape, fs-cap, hold-bytes, hold-files]
+  example: "WRITE fs hold/notes.txt first draft"
+- verb: EXEC
+  form: "EXEC tools/<name>.py <args>"
+  may:
+    - "run a crowned program in <code>tools/</code>, with up to 16 relative args"
+    - "as a worker that sees only the world; it writes only <code>hold/</code>, <code>proposed/</code>, <code>tests/proposed/</code>"
+    - "for at most <code>T_tool</code> (5 s); 4096 bytes of output count"
+  must_not:
+    - "run anything outside <code>tools/*.py</code> — drafts wait for the crown"
+    - "reach the network, mount, trace, or open io_uring (the worker is killed)"
+    - "read outside the world: <code>/etc</code>, <code>$HOME</code>, <code>/proc</code> are not in its view"
+  rules: [exec-prog, exec-arg, exec-argc, sandbox, t-tool, tty-cap, out-ceil, worker-setup]
+  example: "EXEC tools/hash.py main/hello.txt"
+- verb: TEST
+  form: "TEST PURE|SCALAR tests/rom/<test>.py"
+  may:
+    - "run a crowned ROM test (Ring 0 muscle) in a worker"
+    - "scratch in a private <code>/tmp</code> that vanishes with the worker"
+  must_not:
+    - "run a draft: only <code>tests/rom/</code>, whose hash is baked at build"
+    - "move <code>main/</code>, ROM, prior snapshots or the token — the view refuses it, and the frame hashes before and after; anything moved disarms the run"
+    - "use <code>JUDGE</code> or <code>VISUAL</code>: those slots are pulled"
+  rules: [test-path, test-kind, test-shape, test-moved, judge-pulled, visual-pulled]
+  example: "TEST PURE tests/rom/test_isa.py"
+- verb: WAIT
+  form: "WAIT <ms>"
+  may:
+    - "time only, up to <code>T_tool</code> (5000 ms); the evidence records what it slept"
+    - "it is a step: framed, counted against <code>N</code>, snapshotted"
+  must_not:
+    - "wait on I/O or a gate — the spec's wider <code>wait</code> is not in this tree"
+    - "outlive a KILL: the owner's stop ends the sleep"
+  rules: [wait-shape, t-tool, kill]
+  example: "WAIT 100"

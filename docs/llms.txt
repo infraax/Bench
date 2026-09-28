@@ -1,0 +1,37 @@
+---
+layout: null
+permalink: /llms.txt
+---
+# Bench
+
+> A custody kernel for agent work — not an agent. Bench gives an unreliable worker (the "intern") five verbs (READ, WRITE, EXEC, TEST, WAIT), frames each step under a clock and quotas, seals a content-hashed snapshot after every step, and lets only the owner crown work into the main tree. Linux only. No model in the tree. License: MIT OR Apache-2.0.
+
+Facts an agent needs:
+- You emit one op per line: `READ fs <path>`, `WRITE fs <hold/…|proposed/…> <one line>`, `EXEC tools/<name>.py <args>`, `TEST PURE|SCALAR tests/rom/<t>.py`, `WAIT <ms>`. No sixth verb.
+- A refusal prints `rule=<id> fix: <hint>`. Act on the fix; do not retry the same line. All ids: {{ '/api/rules.json' | absolute_url }}
+- A parse fault refuses the whole script before any frame. A run-time refusal stops the run at that step (the step is snapshotted with its rule).
+- Budgets: N=8 frames, T_tool=5 s per worker, T_frame=200 ms, hold/ growth 64 KiB and 256 entries per session, 4096 bytes of output per step.
+- Repository work: run `make env && make ledger-test`, report the summary (not the log), read HANDOFF.md, one concern per commit, spec/ meaning is frozen.
+- Never put tokens or sessions/ contents in a chat, commit or log.
+
+## Pages
+- [Home]({{ '/' | absolute_url }}): what Bench is, the process diagram, measured numbers
+- [Architecture]({{ '/architecture/' | absolute_url }}): layers, the five verbs, one frame, rings and the crown
+- [Playground]({{ '/playground/' | absolute_url }}): check an ops script and decode a status line in the browser
+- [Rules]({{ '/rules/' | absolute_url }}): every refusal rule with its fix
+- [Measure]({{ '/measure/' | absolute_url }}): timing classes on one machine
+- [Compare]({{ '/compare/' | absolute_url }}): where Bench sits among agent harnesses (layers, not benchmarks)
+- [Start]({{ '/start/' | absolute_url }}): install, full gate, arming, lamps, owner commands, exit codes
+- [Agents]({{ '/agents/' | absolute_url }}): the session protocol and these endpoints
+
+## Machine-readable
+- {{ '/api/index.json' | absolute_url }}
+- {{ '/api/rules.json' | absolute_url }}
+- {{ '/api/verbs.json' | absolute_url }}
+- {{ '/api/ops.json' | absolute_url }}
+- {{ '/api/perf.json' | absolute_url }}
+- {{ '/assets/js/ops-check.js' | absolute_url }} (parser mirror; node: require it, call .script(text))
+
+## Source
+- Repository: {{ site.repo }}
+- Spec (frozen meaning): {{ site.repo }}/blob/HEAD/spec/BENCH_SPEC.md

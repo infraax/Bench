@@ -1,0 +1,57 @@
+---
+title: Playground
+nav: playground
+permalink: /playground/
+wide: true
+description: Check an ops script the way bench parses it, and decode a status line — in the browser, offline.
+---
+<h1>Playground</h1>
+<p class="board__line">Write the intern's lines. See what bench would do — before you run it.</p>
+
+<p>This is a mirror of the parser in <code>supervisor/main.c</code> and the foundation's slot gates,
+checked on every push against the ROM truth table (<code>make site-check</code>). It runs in your
+browser; nothing is sent anywhere. The binary stays the authority: a tool that is missing from
+<code>tools/</code>, a quota or a clock is only known at run time.</p>
+
+<section class="tool" data-checker>
+  <div class="tool__head">
+    <h2 class="tool__title">Script checker</h2>
+    <div class="presets" role="group" aria-label="Examples">
+      <button type="button" data-preset="clean">clean run</button>
+      <button type="button" data-preset="ring">write to main/</button>
+      <button type="button" data-preset="slot">pulled slot</button>
+      <button type="button" data-preset="shell">shell habits</button>
+    </div>
+  </div>
+  <label class="sr" for="ops">Ops script, one verb per line</label>
+  <textarea id="ops" class="ops" spellcheck="false" autocapitalize="off" autocomplete="off" rows="8">READ  fs main/hello.txt
+WRITE fs hold/out.txt hello from the intern
+EXEC  tools/hash.py hold/out.txt
+TEST  PURE tests/rom/test_isa.py
+WAIT  100</textarea>
+  <div class="verdict" data-verdict aria-live="polite"></div>
+  <ol class="lines" data-lines></ol>
+  <div class="tool__foot">
+    <button type="button" class="btn btn--ghost btn--small" data-share>Copy share link</button>
+    <button type="button" class="btn btn--ghost btn--small" data-download>Save as touch.ops</button>
+    <span class="mute" data-shared aria-live="polite"></span>
+  </div>
+</section>
+
+<section class="tool" data-decoder>
+  <h2 class="tool__title">Status decoder</h2>
+  <p>Paste the one line <code>bench status --line</code> prints.</p>
+  <label class="sr" for="statusline">Status line</label>
+  <input id="statusline" class="ops ops--one" spellcheck="false" autocapitalize="off" autocomplete="off"
+         value="1790488197-8946 ok n=5/8 snap=005-79f0fe07 lamps=HOLD,BLIND hold=+0/65536 files=+1/256 armed=yes helper=v0 lock=free">
+  <div class="lamprow" data-lamps aria-hidden="true"></div>
+  <dl class="fields" data-fields></dl>
+</section>
+
+<p class="caption">Every rule links to its entry on <a href="{{ '/rules/' | relative_url }}">Rules</a>. Agents:
+the same table is at <a href="{{ '/api/rules.json' | relative_url }}"><code>/api/rules.json</code></a>.</p>
+
+<script type="application/json" id="rules-data">{{ site.data.rules | jsonify }}</script>
+<script>window.BENCH_RULES_URL = "{{ '/rules/' | relative_url }}";</script>
+<script src="{{ '/assets/js/ops-check.js' | relative_url }}" defer></script>
+<script src="{{ '/assets/js/playground.js' | relative_url }}" defer></script>

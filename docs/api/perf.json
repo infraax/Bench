@@ -1,0 +1,5 @@
+---
+layout: null
+permalink: /api/perf.json
+---
+{"source": "docs/PERF_AND_MAP.md", "machine": {{ site.data.perf.machine | jsonify }}, "headline": {{ site.data.perf.headline | jsonify }}, "groups": {{ site.data.perf.groups | jsonify }}}

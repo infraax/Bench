@@ -25,6 +25,33 @@ description: A custody kernel for agent work — five verbs, sealed snaps. Not a
   </div>
 </section>
 
+<form class="tryline" action="{{ '/playground/' | relative_url }}" data-tryline>
+  <label class="sr" for="tryop">Try a line</label>
+  <input id="tryop" class="ops ops--one" value="WRITE fs main/app.py fixed it" spellcheck="false" autocapitalize="off" autocomplete="off">
+  <button class="btn" type="submit">Would bench take it?</button>
+</form>
+
+<div class="doors">
+  <section class="door" aria-labelledby="door-human">
+    <p class="door__who">for people</p>
+    <h3 id="door-human">Run it on a Linux box</h3>
+    <ul>
+      <li><a href="{{ '/start/' | relative_url }}">Start</a> — clone, <code>make env &amp;&amp; make ledger-test</code>, arm, lamps</li>
+      <li><a href="{{ '/playground/' | relative_url }}">Playground</a> — check a script before a run</li>
+      <li><a href="{{ '/rules/' | relative_url }}">Rules</a> — what each refusal means and how to fix it</li>
+    </ul>
+  </section>
+  <section class="door" aria-labelledby="door-agent">
+    <p class="door__who">for agents</p>
+    <h3 id="door-agent">Read the machine side</h3>
+    <ul>
+      <li><a href="{{ '/agents/' | relative_url }}">Agents</a> — grammar, session protocol, what not to do</li>
+      <li><a href="{{ '/llms.txt' | relative_url }}"><code>/llms.txt</code></a> — the whole site as plain text</li>
+      <li><a href="{{ '/api/index.json' | relative_url }}"><code>/api/*.json</code></a> — rules, verbs, truth table, timings</li>
+    </ul>
+  </section>
+</div>
+
 <h2>Who starts whom</h2>
 <figure class="figure figure--scroll">
   <div class="figure__frame">
