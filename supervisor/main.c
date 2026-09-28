@@ -1035,6 +1035,30 @@ static int cmd_demo(void) {
     return prefix(out, "GREEN") ? 0 : 1;
 }
 
+/* <session>/snap-<k> or snap-<k> (in the current session) -> sid, sname. one parser for the
+   owner commands that name a snap. 0 ok · 1 no current session · 2 not a snap reference. */
+static int snap_ref(const char *who, const char *arg, char *sid, size_t sidn, char *sname, size_t snn) {
+    char cdir[1024];
+    const char *slash = strchr(arg, '/');
+    if (slash) {
+        size_t l = (size_t)(slash - arg);
+        if (l == 0 || l >= sidn) { fprintf(stderr, "%s: bad session in %s\n", who, arg); return 2; }
+        memcpy(sid, arg, l);
+        sid[l] = 0;
+        snprintf(sname, snn, "%.31s", slash + 1);
+    } else {
+        if (current_dir(cdir, sizeof cdir, sid, sidn)) { fprintf(stderr, "%s: no current session\n", who); return 1; }
+        snprintf(sname, snn, "%.31s", arg);
+    }
+    char *end;
+    if (strncmp(sname, "snap-", 5) || !sname[5] || (strtoul(sname + 5, &end, 10), *end) ||
+        strchr(sid, '/') || strstr(sid, "..") || sid[0] == '.') {
+        fprintf(stderr, "%s: '%s' is not <session>/snap-<k>\n", who, arg);
+        return 2;
+    }
+    return 0;
+}
+
 /* ---- restore: resume = load snap ----
  * bench restore snap-<k> | <session>/snap-<k>
  * an owner command, not an intern op: armed, world locked, ROM crowned. the snap must hold a
@@ -1043,24 +1067,9 @@ static int cmd_demo(void) {
  * the new session's s0 is the restored board. no frames run. */
 static int cmd_restore(int argc, char **argv) {
     if (argc != 1) { fprintf(stderr, "usage: bench restore snap-<k> | <session>/snap-<k>\n"); return 2; }
-    char sid[128], sname[32], cdir[1024];
-    const char *arg = argv[0], *slash = strchr(arg, '/');
-    if (slash) {
-        size_t l = (size_t)(slash - arg);
-        if (l == 0 || l >= sizeof sid) { fprintf(stderr, "restore: bad session in %s\n", arg); return 2; }
-        memcpy(sid, arg, l);
-        sid[l] = 0;
-        snprintf(sname, sizeof sname, "%.31s", slash + 1);
-    } else {
-        if (current_dir(cdir, sizeof cdir, sid, sizeof sid)) { fprintf(stderr, "restore: no current session\n"); return 1; }
-        snprintf(sname, sizeof sname, "%.31s", arg);
-    }
-    char *end;
-    if (strncmp(sname, "snap-", 5) || !sname[5] || (strtoul(sname + 5, &end, 10), *end) ||
-        strchr(sid, '/') || strstr(sid, "..") || sid[0] == '.') {
-        fprintf(stderr, "restore: '%s' is not <session>/snap-<k>\n", arg);
-        return 2;
-    }
+    char sid[128], sname[32];
+    int sr = snap_ref("restore", argv[0], sid, sizeof sid, sname, sizeof sname);
+    if (sr) return sr;
     if (rom_ok() != 0) return 4;
     TokenId tok;
     char tw[256];
@@ -1170,24 +1179,10 @@ static int cmd_restore(int argc, char **argv) {
  * failure the half-built world is removed. */
 static int cmd_fork(int argc, char **argv) {
     if (argc != 2) { fprintf(stderr, "usage: bench fork snap-<k> | <session>/snap-<k> <new-world-dir>\n"); return 2; }
-    char sid[128], sname[32], cdir[1024];
-    const char *arg = argv[0], *target = argv[1], *slash = strchr(arg, '/');
-    if (slash) {
-        size_t l = (size_t)(slash - arg);
-        if (l == 0 || l >= sizeof sid) { fprintf(stderr, "fork: bad session in %s\n", arg); return 2; }
-        memcpy(sid, arg, l);
-        sid[l] = 0;
-        snprintf(sname, sizeof sname, "%.31s", slash + 1);
-    } else {
-        if (current_dir(cdir, sizeof cdir, sid, sizeof sid)) { fprintf(stderr, "fork: no current session\n"); return 1; }
-        snprintf(sname, sizeof sname, "%.31s", arg);
-    }
-    char *end;
-    if (strncmp(sname, "snap-", 5) || !sname[5] || (strtoul(sname + 5, &end, 10), *end) ||
-        strchr(sid, '/') || strstr(sid, "..") || sid[0] == '.') {
-        fprintf(stderr, "fork: '%s' is not <session>/snap-<k>\n", arg);
-        return 2;
-    }
+    char sid[128], sname[32];
+    const char *target = argv[1];
+    int sr = snap_ref("fork", argv[0], sid, sizeof sid, sname, sizeof sname);
+    if (sr) return sr;
     if (!target[0]) { fprintf(stderr, "fork: empty target\n"); return 2; }
     struct stat st;
     if (lstat(target, &st) == 0) { fprintf(stderr, "fork: %s exists — a fork makes a new world, never into one\n", target); return 1; }
@@ -1323,22 +1318,8 @@ static int cmd_verify(int argc, char **argv) {
     const char *one = NULL, *arg = argc == 1 ? argv[0] : NULL;
     char sname[32] = "";
     if (arg) {
-        const char *slash = strchr(arg, '/');
-        if (slash) {
-            size_t l = (size_t)(slash - arg);
-            if (l == 0 || l >= sizeof sid) { fprintf(stderr, "verify: bad session in %s\n", arg); return 2; }
-            memcpy(sid, arg, l); sid[l] = 0;
-            snprintf(sname, sizeof sname, "%.31s", slash + 1);
-        } else {
-            if (current_dir(cdir, sizeof cdir, sid, sizeof sid)) { fprintf(stderr, "verify: no current session\n"); return 1; }
-            snprintf(sname, sizeof sname, "%.31s", arg);
-        }
-        char *end;
-        if (strncmp(sname, "snap-", 5) || !sname[5] || (strtoul(sname + 5, &end, 10), *end) ||
-            strchr(sid, '/') || strstr(sid, "..") || sid[0] == '.') {
-            fprintf(stderr, "verify: '%s' is not <session>/snap-<k>\n", arg);
-            return 2;
-        }
+        int sr = snap_ref("verify", arg, sid, sizeof sid, sname, sizeof sname);
+        if (sr) return sr;
         one = sname;
     } else if (current_dir(cdir, sizeof cdir, sid, sizeof sid)) {
         fprintf(stderr, "verify: no current session\n");
