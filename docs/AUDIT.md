@@ -4,6 +4,29 @@ A pass over the whole tree: supervisor C, the Python mirror, tools, harness, sit
 what was fixed (with the test that pins it), what is open, what was measured and dropped, and a
 feature list. Branch `claude/handoff-start-004f8n`.
 
+## Round 2 — found by the deep kit (session 13)
+
+The adversarial pass ([`TESTING_KIT.md`](TESTING_KIT.md)) found eleven more. Each fix has a test
+that fails on the old code (or a corpus seed / ROM row that pins it).
+
+| # | Found by | Finding | Fix |
+|---|---|---|---|
+| 10 | fuzz_parse | a NUL byte read as `line-long`; `check` swallowed the next line | lines read by length; rule `line-nul` |
+| 11 | fuzz_parse | `WAIT \v2` ran as `WAIT 2` (`strtoul` skips `\v`) | digits, optionally after one `+` |
+| 12 | fuzz_parse | site mirror folded U+017F/U+0131 to ASCII | ASCII-only case, like `strcasecmp` |
+| 13 | fuzz_parse | site mirror kept a stray CR on `WAIT 1\r\rx` | cut at the first CR/LF |
+| 14 | fault_sweep | exit 0 while the final `STATE` write failed | exit 1, `rule=internal` |
+| 15 | fault_sweep | a step passed with unpinned output (`sha256=unreadable`) | the step faults |
+| 16 | fault_sweep | retention cut short left a torn half-session (43 violations → 0) | retire by rename, then delete |
+| 17 | hash_fuzz | `*.pyc`/`__pycache__` skipped under `hold/` too: bytes parked there were not evidence | `hold/` skips nothing |
+| 18 | powercut_sweep | bench killed mid-EXEC left the worker writing `hold/` with no knife | `PR_SET_PDEATHSIG` on workers |
+| 19 | mutate (py) | 83 denylist names removable unnoticed (score 61% → 93%) | `test_rom_denylist.py` |
+| 20 | mutate (py) | `is_ring0` missed a door named without a call (`f = eval`) | bare-name rule |
+
+Also new: **F3 is done** (`FRAME` log lines + `bench stats`), and `bench check` (the planner's
+lint; the pieces of F4 that need no world are in it). Ideas for what comes next, from a model's
+point of view: [`IDEAS.md`](IDEAS.md).
+
 ## Fixed (each has a test that fails on the old binary)
 
 | # | Finding | Fix | Pinned by |
@@ -55,8 +78,8 @@ Ranked by value ÷ cost. **None needs a sixth verb, a `spec/` change or a `sandb
 - **F2 `bench replay --verify <session>`.** Re-run `OPS` in a forked world from s0 and compare every
   snap's tree hash. Turns "replay is stream + snapshots" from a claim into a check. Prerequisite
   for Sprint 5 trace export.
-- **F3 `frame_ms=` in MANIFEST.** Per-frame wall time in evidence; `bench stats` prints p50/p95 per
-  verb from a session. Free observability; feeds `PERF_AND_MAP.md` from real sessions.
+- ~~**F3 `frame_ms=` in MANIFEST.**~~ **Done (session 13)** as a `FRAME … frame_us= tool_us=` log
+  line per step (a MANIFEST cannot hold the time of the snap that writes it) + `bench stats`.
 - **F4 Prerequisite blocks at parse time.** Refuse `EXEC` of a tool not on disk and `WAIT > T_tool`
   before any frame runs (new rule ids, not new verbs). Faults move from frame 7 to line 7.
 
@@ -84,5 +107,6 @@ Ranked by value ÷ cost. **None needs a sixth verb, a `spec/` change or a `sandb
 
 ## Suggested order
 
-F1 → F3 → F2 → F4, then F5/F6 as the first human-facing tools. Owner calls first: token fallback
+F1 → F2 → F4, then F5/F6 as the first human-facing tools (F3 done). The model-centric list in
+[`IDEAS.md`](IDEAS.md) ranks hash-chained evidence, receipts and `bench try` first. Owner calls first: token fallback
 (one line) and whether `BENCH_DURABLE` should be the default.

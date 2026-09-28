@@ -25,6 +25,8 @@ mid-run disarms. The intern cannot create it.
 | `bench restore snap-<k> \| <session>/snap-<k>` | load a verified snapshot's `hold/` as a new session; old `hold/` kept as `hold.before` | armed, ROM crowned, world free |
 | `bench fork snap-<k> \| <session>/snap-<k> <dir>` | a new, unarmed world from a verified snapshot | armed, ROM crowned; `<dir>` new, outside this world |
 | `bench rules` | the refusal table: `rule=<id> fix: <hint>` | — |
+| `bench check [--n N] <script\|->` | lint a script without running it: each line `blank\|ok\|parse\|run` with its `rule=`, then the verdict a run would reach (`check ops= frames= exit=`, `stop line= rule=`). Same parser as `run`; refusals predicted from the foundation board | — (writes nothing) |
+| `bench stats [<session>]` | where a session's time went: per verb, `frame_us` p50/p95/max (the C thread's own work) and `tool_us`, plus headroom against `T_frame` | — |
 | `bench demo` | run the ROM suite as one knifed child | ROM crowned |
 
 ## Exit codes
@@ -55,5 +57,10 @@ The step's `MANIFEST` (`sessions/<id>/snap-<k>/MANIFEST`) carries the same evide
 - `make clean` removes build products and sessions but keeps `OWNER_TOKEN`.
 - `run` keeps the newest 20 sessions (`--keep M`).
 - `make env`, `make ledger-test`: machine card and a ledger row (`ledger/README.md`).
+- `make audit-evidence` (or `python3 scripts/evidence-audit.py <world>`): re-derive every session's
+  chain, board hashes, out pins and seals in Python — a second witness to `bench verify`.
+- `make test-deep` (`DEEP=--quick` for about a minute): the adversarial pass — fuzzers, fault and
+  power-cut sweeps, mutation testing. Report in `ledger/deep-*/summary.md`
+  ([`TESTING_KIT.md`](TESTING_KIT.md)).
 
 Full behavior, quotas, snapshot format and worker limits: [`reference.md`](reference.md).

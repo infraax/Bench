@@ -41,6 +41,8 @@ make e2e                                  # fixture intern -> frames -> snaps ->
 ./supervisor/bench verify [snap-<k> | <session>/snap-<k>]   # content-hash integrity check
 ./supervisor/bench fork snap-<k> | <session>/snap-<k> <new-world-dir>   # a new world from a verified snap
 ./supervisor/bench rules                  # the refusal table: rule id -> one-line fix
+./supervisor/bench check [--n N] script   # lint without running: per-line verdict + predicted stop
+./supervisor/bench stats [<session>]      # per-verb frame_us / tool_us, T_frame headroom
 make perf                                 # fork cost; N parallel worlds vs sequential
 ```
 
@@ -64,6 +66,17 @@ Every rejection names a stable rule and a fix, so a model driving the intern can
 FAULT line 2: ring: intern writes hold/ or proposed/ only, not main/x
   rule=write-ring fix: write under hold/ or proposed/; main/ is Ring 0
 ```
+
+A script is read by line length, not by C string: a line of 511 bytes or more is `line-long`, a
+line holding a NUL byte is `line-nul` (a text parser cannot see past it), and a line ends at its
+first CR or LF. `WAIT` takes decimal digits, optionally after one `+` (no leading `\v`/`\f`, no
+`-`).
+
+`bench check` runs every line through the same `parse_line`, then predicts the refusals a frame
+makes before it touches the world (slot unknown or pulled, `JUDGE`/`VISUAL`, `WAIT` over `T_tool`,
+EXEC over 16 args, over N) from the same foundation board a session starts with. It needs no
+token, takes no lock and writes nothing. A clean check does not promise a clean run: missing
+files, tool behaviour and quotas are only known inside a frame.
 
 Parse faults (before any frame) print the rule on the next line. A refused step also carries
 `rule=<id>` in its evidence line, so its MANIFEST records it; a gate stop (no step, no snap) prints
@@ -152,14 +165,24 @@ A finished snapshot is **evidence**, protected in two independent layers:
   is kept in `sessions/<new>/hold.before`. The new session's s0 is the restored board; status `restored`.
 - **Retention**: `run` keeps the newest 20 session dirs (`--keep M` > `BENCH_KEEP`). Never pruned:
   `CURRENT`, sessions holding `hold.before`, anything not named `<epoch>-<pid>`. Links not followed.
-  Retention chmods a sealed tree back to writable only to delete it.
+  Retention chmods a sealed tree back to writable only to delete it. A session is retired whole or
+  not at all: renamed to `.retired-<id>` first, then deleted; a delete cut short (full disk, crash)
+  leaves a `.retired-*` leftover, which the next run removes — never a half-deleted session.
+- **What the hashes cover**: regular files, by relative path, size and bytes (symlinks, fifos and
+  empty dirs are not board state). `__pycache__/` and `*.pyc` are skipped as the owner's Python's
+  by-products in `main/` and `tests/rom/` — but **not in `hold/`**: the intern writes hold/, so
+  nothing in it is derived, and bytes parked under a `.pyc` name there are evidence like any other.
 
 ## Logs and tool output
 
 - `sessions/<id>/log` — supervisor and mailbox lines only (`ARM`, `EXEC … -> out-3`, `MAILBOX …`,
-  `RETAIN`, `TAINT`, `RESTORE`).
+  `RETAIN`, `TAINT`, `RESTORE`), and one `FRAME n= op= frame_us= tool_us= rc=` per framed step:
+  the C thread's own time and the tool's, read by `bench stats`.
 - `sessions/<id>/out-<n>` — step n's tool stdout+stderr, or the bytes a `READ` returned. The MANIFEST
-  pins it: `out=out-<n> bytes=<b> sha256=<hex>`. A tool cannot write a line into the log.
+  pins it: `out=out-<n> bytes=<b> sha256=<hex>`. A tool cannot write a line into the log. An out
+  file that cannot be read back is recorded `sha256=unreadable` and the step faults
+  (`rule=internal`): no step passes with unpinned output.
+- A run exits 0 only if its final `STATE` (`status=ok`) was written; otherwise it faults.
 
 ## Parallel worlds (`bench fork`)
 
@@ -232,7 +255,10 @@ nothing more. Tool children are limited by the C supervisor:
 - **no worker outlives its frame**: each child leads its own process group; bench is a child
   subreaper. At frame end the group is killed, then every process re-parented to bench (a
   double-forked or `setsid` daemon) is killed and reaped, the helper excepted. Evidence says
-  `strays=N` when any were found.
+  `strays=N` when any were found. A worker also dies with its supervisor (`PR_SET_PDEATHSIG`, set
+  just before exec): bench killed mid-step (`kill -9`, OOM) cannot leave a worker writing `hold/`
+  with no knife. Known gap: a worker's own daemonized child outlives a killed supervisor (a PID
+  namespace closes it; owner-gated).
 - **output ceiling**: a child's stdout to `out-<n>` is killed past `OUT_CEIL_BYTES` (1 MiB), so a
   flood cannot fill the disk within `T_tool`.
 

@@ -8,6 +8,7 @@ Gates, split by what the machine can prove.
 | algebra | `make test-rom` | exhaustive bus test (C, no worker) + the Ring-0 ROM suite (pure python) | hosted CI and locally |
 | site | `make site-check` | the site's rule/ops data matches `refusal.c` and the ROM table; the playground parser agrees with every `OPS_TABLE` row | hosted CI and locally (needs node) |
 | custody | `make test` / `make ledger-test` | all of the above + the harness: frames, clock, lock, helper, snapshots, fork, **worker children** | a Linux box that can build the worker view; the ledger row is the record |
+| deep | `make test-deep` | differential + metamorphic fuzzing, errno and SIGKILL sweeps with an independent evidence audit, mutation testing ([`TESTING_KIT.md`](TESTING_KIT.md)) | locally, by choice; report in `ledger/deep-*/` — never in hosted CI |
 
 **Why the split.** The harness starts worker children, each in its own mount namespace (plus a
 user namespace when not root), with landlock and seccomp. A hosted runner is not root, and

@@ -9,6 +9,7 @@ permalink: /llms.txt
 Facts an agent needs:
 - You emit one op per line: `READ fs <path>`, `WRITE fs <hold/…|proposed/…> <one line>`, `EXEC tools/<name>.py <args>`, `TEST PURE|SCALAR tests/rom/<t>.py`, `WAIT <ms>`. No sixth verb.
 - A refusal prints `rule=<id> fix: <hint>`. Act on the fix; do not retry the same line. All ids: {{ '/api/rules.json' | absolute_url }}
+- Before spending frames, lint the plan: `bench check <script>` (or `-` for stdin) prints every line's verdict and the rule a run would stop on. No token needed, nothing written. The playground runs the same checks in a browser.
 - A parse fault refuses the whole script before any frame. A run-time refusal stops the run at that step (the step is snapshotted with its rule).
 - Budgets: N=8 frames, T_tool=5 s per worker, T_frame=200 ms, hold/ growth 64 KiB and 256 entries per session, 4096 bytes of output per step.
 - Repository work: run `make env && make ledger-test`, report the summary (not the log), read HANDOFF.md, one concern per commit, spec/ meaning is frozen.
