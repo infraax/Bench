@@ -93,10 +93,12 @@ gate → [TEST: read board] → tool → [TEST: post-conditions] → quotas → 
 all in `frame()` (`supervisor/frame.c`).
 
 - **gate**: KILL, then the pinned token, then helper `FRAME_OK`. A stop here is no step and no snap.
-- **TEST post-conditions** (the second layer; the namespace view refuses these moves first): before a `TEST`, the frame hashes `main/`, `tests/rom/`, and the session's
+- **TEST post-conditions** (the second layer; the namespace view refuses these moves first, and
+  `TestPostconditionBackstop` exercises this layer by moving the board from outside the child): before a `TEST`, the frame hashes `main/`, `tests/rom/`, and the session's
   frozen artifacts (`SESSION`, `OPS`, every prior `snap-*/`), and stats the token files; after it,
-  again — whatever the test reported. `TEST` children run without landlock and, here, as root, so they
-  can reach `sessions/` where `EXEC` cannot; this catches a test that rewrites a prior snapshot.
+  again — whatever the test reported, and whoever moved it. `TEST` children run without landlock,
+  but their view holds `sessions/` read-only; this layer still catches a prior snapshot rewritten
+  during the step.
   Anything moved → `fault=test-postcondition moved=main,rom,sessions,token`, snap without the board
   (`tree=skipped:tainted`), status `disarmed`, exit 5. A touched or minted `sessions/OWNER_TOKEN` is
   renamed to `OWNER_TOKEN.tainted-<session>` (never deleted), so it arms nothing.

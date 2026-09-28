@@ -1256,8 +1256,8 @@ class TestPostconditions(unittest.TestCase):
     1. the namespace (sandbox.c): a TEST child sees main/, ROM and sessions/ read-only, so a move
        is refused inside the child (EROFS) and nothing moves — asserted below;
     2. the frame's post-conditions: hash main/, ROM, sessions, the token before and after, and
-       disarm on any move. no TEST can reach layer 2 while layer 1 holds; it stays as the backstop
-       for a kernel where the view could be bypassed."""
+       disarm on any move. no TEST child can reach layer 2 while layer 1 holds; TestPostconditionBackstop
+       drives it by moving the board from outside the child."""
 
     def runner(self, w, body):
         # fixture runner: tries `body` (what a crowned test must not do), reports how it went,
@@ -1347,6 +1347,79 @@ class TestPostconditions(unittest.TestCase):
         self.assert_refused(w, r, k=2)
         self.assertEqual((w.snaps()[1] / "hold" / "keep.txt").read_text(), "v1\n")
         self.assertEqual(w.bench("verify").returncode, 0)
+
+
+class TestPostconditionBackstop(unittest.TestCase):
+    """layer 2 on its own. the worker view (layer 1) stops a TEST child from moving the board, so
+    here the board is moved from OUTSIDE the child, by the harness, while the TEST step runs. the
+    frame hashes main/, ROM, sessions and the token before and after the tool — whoever moved them
+    — so it must disarm. handshake, no sleeps: the child writes hold/started, the harness moves the
+    board and writes hold/go, the child reports GREEN."""
+
+    RUNNER = ("import os, time\n"
+              "open('hold/started', 'w').write('1')\n"
+              "t0 = time.monotonic()\n"
+              "while not os.path.exists('hold/go') and time.monotonic() - t0 < 4:\n"
+              "    time.sleep(0.01)\n"
+              "print('GREEN 1 tests')\n")
+
+    def during_test(self, w, move, script="TEST PURE tests/rom/test_isa.py\n"):
+        (w.root / "tools" / "test_runner.py").write_text(self.RUNNER)
+        proc = subprocess.Popen([str(BENCH), "run", w.script(script)], cwd=IMAGE, env=w.env,
+                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        started = w.root / "hold" / "started"
+        t0 = time.monotonic()
+        while not started.exists() and time.monotonic() - t0 < 10 and proc.poll() is None:
+            time.sleep(0.01)
+        self.assertTrue(started.exists(), "the TEST child never started")
+        move(w)
+        (w.root / "hold" / "go").write_text("1")
+        out, _ = proc.communicate(timeout=30)
+        return proc.returncode, out
+
+    def assert_tainted(self, w, rc, out, what):
+        self.assertEqual(rc, 5, out)
+        self.assertIn(f"fault=test-postcondition moved={what}", out)
+        self.assertIn("  rule=test-moved fix: ", out)
+        self.assertEqual(w.state()["status"], "disarmed")
+        man = (w.snaps()[-1] / "MANIFEST").read_text()
+        self.assertIn("tree=skipped:tainted", man)
+        self.assertIn("TAINT", (w.session() / "log").read_text())
+
+    def test_main_moved_during_a_test_disarms(self):
+        w = addWorld(self)
+        rc, out = self.during_test(w, lambda w: (w.root / "main" / "moved.txt").write_text("x"),
+                                   "TEST PURE tests/rom/test_isa.py\nWAIT 1\n")
+        self.assert_tainted(w, rc, out, "main")
+        self.assertEqual(w.state()["n"], "1")          # WAIT never ran
+
+    def test_rom_moved_during_a_test_disarms(self):
+        w = addWorld(self)
+        rom = w.root / "tests" / "rom" / "test_isa.py"
+        rc, out = self.during_test(w, lambda w: rom.write_text(rom.read_text() + "# moved\n"))
+        self.assert_tainted(w, rc, out, "rom")
+
+    def test_token_touched_during_a_test_disarms_and_quarantines_it(self):
+        w = addWorld(self)
+
+        def touch(w):
+            st = w.token.stat()
+            os.utime(w.token, ns=(st.st_atime_ns, st.st_mtime_ns + 10**9))
+        rc, out = self.during_test(w, touch)
+        self.assert_tainted(w, rc, out, "token")
+        self.assertFalse(w.token.exists())
+        self.assertEqual(len(list((w.root / "sessions").glob("OWNER_TOKEN.tainted-*"))), 1)
+
+    def test_prior_snapshot_edited_during_a_test_disarms(self):
+        w = addWorld(self)
+
+        def tamper(w):
+            man = w.snaps()[0] / "MANIFEST"
+            man.parent.chmod(0o755)
+            man.chmod(0o644)
+            man.write_text(man.read_text() + "# tamper\n")
+        rc, out = self.during_test(w, tamper)
+        self.assert_tainted(w, rc, out, "sessions")
 
 
 class TestMailbox(unittest.TestCase):
