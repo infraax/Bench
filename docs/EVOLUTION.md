@@ -1,6 +1,6 @@
 # Evolution — Bench
 
-What exists, what comes next, what waits. Each line is either in the tree, in `DESIGN_REVIEW.md`,
+What exists, what comes next, what waits. Each line is either in the tree, in `history/DESIGN_REVIEW.md`,
 or in `spec/BENCH_SPEC.md`. Nothing here adds a verb. The spec is unchanged.
 
 ---
@@ -104,7 +104,7 @@ Ordered. Each is a supervisor change or a tool, never a verb. (Sessions 3–4 cl
 
 ## Spec amendments still waiting on humans
 
-From `DESIGN_REVIEW.md`. None applied; the code works without them but depends on the reading given.
+From `history/DESIGN_REVIEW.md`. None applied; the code works without them but depends on the reading given.
 
 | # | Amendment | Seats that must initial | Code already assumes |
 |---|---|---|---|

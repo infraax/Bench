@@ -1,9 +1,9 @@
 # Comparison — Bench vs 22 agent harnesses
 
-Rebuilt from `research/` (audit of 2026-09-28): pinned repos in `research/repos.tsv`, sizes in
-`research/loc.txt`, code references in `research/evidence.txt`, checked sources in `research/sources.md`.
+Rebuilt from `docs/research/` (audit of 2026-09-28): pinned repos in `docs/research/repos.tsv`, sizes in
+`docs/research/loc.txt`, code references in `docs/research/evidence.txt`, checked sources in `docs/research/sources.md`.
 Every claim about another tool below is either in `evidence.txt` (file:line at the pinned SHA) or in a
-source listed in `sources.md`. Re-derive with `sh research/fetch.sh && sh research/evidence.sh`.
+source listed in `sources.md`. Re-derive with `sh docs/research/fetch.sh && sh docs/research/evidence.sh`.
 
 ---
 
@@ -30,7 +30,7 @@ no custody of the filesystem).
 
 ## 2. Size
 
-`research/loc.txt`, code and test lines at the pinned SHA.
+`docs/research/loc.txt`, code and test lines at the pinned SHA.
 
 | Harness | Code | Test | × Bench (code) |
 |---|---:|---:|---:|
@@ -144,6 +144,6 @@ Verdicts: **build** (Tier S, chosen) · **adapt** (Tier A, reshape to fit five v
 | Commit after every edit into the working repo | aider (`auto_commits=True`) | writes the owner's tree; Bench's crown is a human act and `main/` is Ring 0 |
 | An unbounded shell tool | every loop harness | a sixth verb in a costume (`TOOLBOX.md`) — and the root of the Gemini CLI and CVE-2025-54795 class |
 | Automatic lifecycle transitions of skills/harness by a background agent | hermes curator (auto-transitions) | keep only its invariant (archive, never delete); the transition itself is the owner's |
-| Auto-raising a limit, retrying a faulted step | loops with retry-on-limit | makes the budget mean "until the intern likes it" (`DESIGN_REVIEW.md`, refusals) |
+| Auto-raising a limit, retrying a faulted step | loops with retry-on-limit | makes the budget mean "until the intern likes it" (`history/DESIGN_REVIEW.md`, refusals) |
 | MCP as world ontology | goose, opencode, others | world state stays files; MCP only as a `tools/` program behind radio (`EVOLUTION.md`) |
 | A model in core as judge | eval harnesses with LLM scorers | a judge is a dirty device; it can annotate, never crown |

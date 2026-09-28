@@ -1,4 +1,4 @@
-# research/ — the 2026-09-28 harness audit, raw
+# docs/research/ — the 2026-09-28 harness audit, raw
 
 Raw material behind the Bench-vs-harnesses comparison. No third-party code is committed here: the
 22 repos are pinned by commit and re-fetched on demand (~2.8 GB; several pack files exceed GitHub's
@@ -13,9 +13,9 @@ Raw material behind the Bench-vs-harnesses comparison. No third-party code is co
 | `sources.md` | papers, docs and incident reports that were checked during the audit |
 
 ```
-sh research/fetch.sh                 # all 22, or: sh research/fetch.sh codex omnigent
-python3 research/loc.py              # recount
-sh research/evidence.sh              # re-derive the references
+sh docs/research/fetch.sh                 # all 22, or: sh docs/research/fetch.sh codex omnigent
+python3 docs/research/loc.py              # recount
+sh docs/research/evidence.sh              # re-derive the references
 ```
 
 Licenses: all 22 are MIT, Apache-2.0 or BSD (see `repos.tsv`). Nothing is redistributed; only

@@ -1,6 +1,6 @@
 # Development plan — staged sprints
 
-Built from the ranking in `COMPARISON.md` §5. Each sprint builds on the one before. No sprint adds a
+Built from the ranking in `history/comparison-2026-09-28.md` §5. Each sprint builds on the one before. No sprint adds a
 verb; owner commands (`restore`, `verify`, `fork`) are not verbs. Every sprint ends with `make test`
 green offline and one measured number committed to the tree.
 
@@ -114,5 +114,5 @@ with every step snapped. **Number:** overhead per step vs the same loop without 
 
 ## Not scheduled
 
-Refused ideas (`COMPARISON.md` §5, Refuse) stay refused. `EVOLUTION.md` "phase next" items (replay,
+Refused ideas (`history/comparison-2026-09-28.md` §5, Refuse) stay refused. `EVOLUTION.md` "phase next" items (replay,
 evidence key table, wall clock, the v1 toolbox) run alongside: replay must land before S5's trace export.

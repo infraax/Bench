@@ -1,6 +1,6 @@
 #!/bin/sh
 # The file:line references behind each idea in the 2026-09-28 ranking, re-derived from the pinned clones.
-#   sh research/evidence.sh [clones_dir]      # default research/clones (run research/fetch.sh first)
+#   sh docs/research/evidence.sh [clones_dir]      # default docs/research/clones (run docs/research/fetch.sh first)
 C=${1:-$(cd "$(dirname "$0")" && pwd)/clones}
 cd "$C" || exit 1
 show() { echo; echo "=== $1"; }

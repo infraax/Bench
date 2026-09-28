@@ -141,7 +141,7 @@ Each finding reproduced on this machine; each fix is a diff in §2 or a proposal
 
 ## E. PRISM-shaped edits (methodology only)
 
-Framing from PRISM (`research/sources.md`): harness edits are budgeted and come in three kinds —
+Framing from PRISM (`docs/research/sources.md`): harness edits are budgeted and come in three kinds —
 **silent correction** (the harness fixes it, the model never sees it), **error block** (refuse with a
 reason the model can act on), **prerequisite block** (refuse before work starts because a known
 precondition fails). Each is scored by **reliable lift**: does it turn a class of failure into a
