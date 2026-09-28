@@ -65,6 +65,13 @@ typedef int (*Tool)(Session *s, void *arg);
 /* set by the signal handler; child_run and WAIT watch it. one flag, one owner (frame.c). */
 extern volatile sig_atomic_t g_halt;
 
+/* no worker outlives its frame. bench is a child subreaper (main.c), so a worker's descendants
+   reparent to bench even after setsid(); child_run SIGKILLs and reaps every child of bench but
+   g_keep_pid (the helper) once the worker returns. g_strays: how many it killed for the last
+   worker (the step's evidence says strays=N when N > 0). */
+extern pid_t g_keep_pid;
+extern unsigned g_strays;
+
 uint64_t nowns(void);
 int  session_start(Session *s, const char *root, const char *dir,
                    uint32_t n, uint32_t k, uint32_t ts, uint32_t tt, uint32_t tS,

@@ -180,7 +180,7 @@ int tree_hash_roots(const char *const *roots, const char *const *paths, int npat
         if (!S_ISDIR(st.st_mode)) continue;
         List l = {0};
         if (walk(abs, paths[i], &l) != 0) { for (size_t j=0;j<l.n;j++) free(l.v[j]); free(l.v); return -1; }
-        qsort(l.v, l.n, sizeof *l.v, cmp_str);
+        if (l.n) qsort(l.v, l.n, sizeof *l.v, cmp_str);   /* empty dir: v is NULL, qsort(NULL) is UB */
         int rc = 0;
         for (size_t j = 0; j < l.n && rc == 0; j++) {
             char abs2[2048];

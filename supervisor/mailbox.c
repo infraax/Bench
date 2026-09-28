@@ -18,6 +18,7 @@
 #include <time.h>
 #include <unistd.h>
 #include "mailbox.h"
+#include "frame.h"
 
 #define T_OPEN_MS 2000   /* helper boot + first PING */
 #define T_ASK_MS  500    /* one answer. counted in T_frame by the gate. */
@@ -94,6 +95,7 @@ int mb_open(Mailbox *m, const char *dir, const char *root, int log_fd, char *why
     close(lfd);
     m->fd = cfd;
     m->pid = pid;
+    g_keep_pid = pid;                          /* the one child bench keeps across frames */
 
     char r[128];
     int ok = mb_ask(m, "PING", NULL, r, sizeof r);
@@ -119,10 +121,17 @@ int mb_ask(Mailbox *m, const char *word, const char *arg, char *reply, size_t n)
 
     char buf[128];
     size_t used = 0;
+    /* one budget for the whole answer, not per byte: a helper that dribbles cannot stretch it */
     int budget = !strcmp(word, "PING") ? T_OPEN_MS : T_ASK_MS;
+    struct timespec t0;
+    clock_gettime(CLOCK_MONOTONIC, &t0);
     for (;;) {
+        struct timespec now;
+        clock_gettime(CLOCK_MONOTONIC, &now);
+        long spent = (now.tv_sec - t0.tv_sec) * 1000L + (now.tv_nsec - t0.tv_nsec) / 1000000L;
+        if (spent >= budget) return -1;
         struct pollfd p = {m->fd, POLLIN, 0};
-        int pr = poll(&p, 1, budget);
+        int pr = poll(&p, 1, (int)(budget - spent));
         if (pr < 0 && errno == EINTR) continue;
         if (pr <= 0) return -1;
         ssize_t r = read(m->fd, buf + used, 1);

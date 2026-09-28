@@ -27,6 +27,33 @@
 #include "sha256.h"
 
 volatile sig_atomic_t g_halt;
+pid_t g_keep_pid = -1;
+unsigned g_strays;
+
+/* kill and reap every child of bench except the helper, until none is left. descendants of a
+   killed stray reparent to bench (subreaper) and are caught by the next round. */
+static unsigned reap_strays(void) {
+    unsigned n = 0;
+    char path[64];
+    snprintf(path, sizeof path, "/proc/self/task/%d/children", (int)getpid());
+    for (int round = 0; round < 64; round++) {
+        FILE *f = fopen(path, "r");
+        if (!f) break;                      /* no CONFIG_PROC_CHILDREN: the group kill still ran */
+        long pid;
+        int found = 0;
+        while (fscanf(f, "%ld", &pid) == 1) {
+            if ((pid_t)pid == g_keep_pid || pid <= 0) continue;
+            found = 1;
+            if (waitpid((pid_t)pid, NULL, WNOHANG) == (pid_t)pid) continue;   /* already dead: reaped, not a stray */
+            kill((pid_t)pid, SIGKILL);
+            waitpid((pid_t)pid, NULL, 0);
+            n++;
+        }
+        fclose(f);
+        if (!found) break;
+    }
+    return n;
+}
 
 /* one clock. overrun and slowness are both measured on the monotonic line;
    a wall-clock warp (settimeofday) must not move a budget. */
@@ -79,6 +106,7 @@ int child_run(const char *root, char *const argv[], Jail jail, char *out, size_t
     pid_t pid = fork();
     if (pid < 0) { close(p[0]); close(p[1]); close(sp[0]); close(sp[1]); return -1; }
     if (pid == 0) {
+        setpgid(0, 0);                      /* its own group: the knife reaches the whole group */
         close(sp[0]);
         int nul = open("/dev/null", O_RDONLY);
         if (nul >= 0) { dup2(nul, 0); close(nul); }
@@ -96,6 +124,8 @@ int child_run(const char *root, char *const argv[], Jail jail, char *out, size_t
         if (write(sp[1], "x", 1)) {}
         _exit(127);
     }
+    setpgid(pid, pid);                      /* both sides set it: no race with an early kill */
+    g_strays = 0;
     close(p[1]);
     close(sp[1]);
     fcntl(p[0], F_SETFL, O_NONBLOCK);
@@ -116,8 +146,10 @@ int child_run(const char *root, char *const argv[], Jail jail, char *out, size_t
             }
             if (out_max && total > out_max) {
                 /* the disk knife: a flood does not outlive the ceiling by more than one buffer */
+                kill(-pid, SIGKILL);
                 kill(pid, SIGKILL);
                 waitpid(pid, &st, 0);
+                g_strays = reap_strays();
                 close(p[0]);
                 close(sp[0]);
                 if (out) out[used] = 0;
@@ -131,8 +163,10 @@ int child_run(const char *root, char *const argv[], Jail jail, char *out, size_t
         int late = (nowns() - t0) / 1000000ull > timeout_ms;
         if (late || g_halt) {
             /* the knife: on timeout, and on KILL — no child outlives the halt by T_tool */
+            kill(-pid, SIGKILL);
             kill(pid, SIGKILL);
             if (!done) waitpid(pid, &st, 0);
+            g_strays = reap_strays();
             close(p[0]);
             close(sp[0]);
             if (out) out[used] = 0;
@@ -145,6 +179,8 @@ int child_run(const char *root, char *const argv[], Jail jail, char *out, size_t
     close(p[0]);
     if (out) out[used] = 0;
     if (nbytes) *nbytes = total;
+    kill(-pid, SIGKILL);                    /* the group, then anything that left it */
+    g_strays = reap_strays();
     /* the child is gone, so every copy of sp[1] is closed: this read cannot block. */
     char why = 0;
     ssize_t got = read(sp[0], &why, 1);
@@ -215,7 +251,7 @@ static int idx_load(Idx *x, const char *path) {
         x->v[x->n++] = e;
     }
     fclose(f);
-    qsort(x->v, x->n, sizeof *x->v, idx_cmp);
+    if (x->n) qsort(x->v, x->n, sizeof *x->v, idx_cmp);   /* empty INDEX: v is NULL, qsort(NULL) is UB */
     return 0;
 }
 

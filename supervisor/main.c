@@ -15,6 +15,7 @@
 #include <string.h>
 #include <strings.h>
 #include <dirent.h>
+#include <sys/prctl.h>
 #include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
@@ -361,6 +362,9 @@ static int t_exec(Session *s, void *arg) {
     if (rc == -5) return ev(s, 1, "deny op=exec prog=%s sandbox SIGSYS rule=sandbox", in->slot);
     if (rc == -6) return ev(s, 1, "deny op=exec prog=%s worker not started rule=worker-setup", in->slot);
     if (nb > s->bus.cap[SLOT_TTY]) return ev(s, 1, "leash op=exec out=%llu>%u rule=tty-cap", (unsigned long long)nb, s->bus.cap[SLOT_TTY]);
+    if (g_strays)
+        return ev(s, rc != 0, "op=exec kind=none slot=%s rc=%d out=%llu strays=%u dirty=0", in->slot, rc,
+                  (unsigned long long)nb, g_strays);
     return ev(s, rc != 0, "op=exec kind=none slot=%s rc=%d out=%llu dirty=0", in->slot, rc, (unsigned long long)nb);
 }
 
@@ -710,13 +714,13 @@ static int retain(unsigned keep) {
             if (!nv) { free(v); closedir(d); return -1; }
             v = nv;
         }
-        snprintf(v[n].name, sizeof v[n].name, "%s", e->d_name);
+        memcpy(v[n].name, e->d_name, strlen(e->d_name) + 1);   /* is_session_name: < 64 bytes */
         v[n].epoch = ep;
         v[n].mt = (long long)st.st_mtim.tv_sec;
         n++;
     }
     closedir(d);
-    qsort(v, n, sizeof *v, sess_newest_first);
+    if (n) qsort(v, n, sizeof *v, sess_newest_first);   /* qsort(NULL, 0) is UB; no sessions = no sort */
     int removed = 0;
     for (size_t i = keep > 0 ? keep - 1 : 0; i < n; i++) {   /* keep-1 old + the new one = keep */
         char p[1100];
@@ -1263,9 +1267,10 @@ static int cmd_fork(int argc, char **argv) {
         }
     }
     if (!bad) {
-        char text[1400];
-        snprintf(text, sizeof text, "forked_from=%s/sessions/%s/%s\ntree=%s\nboard=%s\n", rroot, sid, sname, tree, board);
-        bad = snprintf(dst, sizeof dst, "%s/sessions/FORKED_FROM", target) >= (int)sizeof dst || write_atomic(dst, text);
+        char text[4096 + 512];   /* rroot is up to PATH_MAX; a cut-off record would lie, so refuse it */
+        int tl = snprintf(text, sizeof text, "forked_from=%s/sessions/%s/%s\ntree=%s\nboard=%s\n", rroot, sid, sname, tree, board);
+        bad = tl < 0 || tl >= (int)sizeof text ||
+              snprintf(dst, sizeof dst, "%s/sessions/FORKED_FROM", target) >= (int)sizeof dst || write_atomic(dst, text);
     }
     if (bad) {
         if (errno) fprintf(stderr, "fork: building %s failed: %s. removed.\n", target, strerror(errno));
@@ -1347,6 +1352,8 @@ static int cmd_verify(int argc, char **argv) {
 }
 
 int main(int argc, char **argv) {
+    /* orphans of a worker reparent to bench, not init, so no worker outlives its frame (frame.c) */
+    prctl(PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0);
     const char *r = getenv("BENCH_ROOT");
     if (r && *r) g_root = r;
     if (argc < 2) goto usage;

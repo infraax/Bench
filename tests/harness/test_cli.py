@@ -491,6 +491,11 @@ for line in c.makefile("rb"):
     if a == "SLEEP":
         time.sleep(10)
         break
+    if a.startswith("DRIBBLE:"):
+        for ch in (a[8:] + "\\n").encode():
+            c.sendall(bytes([ch]))
+            time.sleep(0.2)
+        continue
     c.sendall((a + "\\n").encode())
 """
 
@@ -1491,6 +1496,18 @@ class TestMailbox(unittest.TestCase):
         self.assert_no_session(w, self.run_copy(w, exe, "WAIT 1\n"), 6, "helper silent")
         self.assertLess(time.monotonic() - t0, 8)
 
+    def test_a_dribbling_helper_is_lost_within_one_budget(self):
+        # T_ask (500 ms) is for the whole answer, not per byte: an answer dribbled a byte every
+        # 200 ms must not stretch a frame by seconds.
+        w = addWorld(self)
+        exe = self.bench_with_helper(w, {"PING": "PING yes helper v0", "ARM_OK": "ARM_OK yes ok",
+                                         "FRAME_OK": "DRIBBLE:FRAME_OK yes armed"})
+        t0 = time.monotonic()
+        r = self.run_copy(w, exe, "WAIT 1\n")
+        self.assertEqual(r.returncode, 6, r.stdout)
+        self.assertIn("helper-lost", r.stdout)
+        self.assertLess(time.monotonic() - t0, 4, "the answer budget restarted per byte")
+
     def test_helper_refusing_arm_stops_start(self):
         w = addWorld(self)
         exe = self.bench_with_helper(w, {"PING": "PING yes helper v0", "ARM_OK": "ARM_OK no stub says no"})
@@ -1881,6 +1898,38 @@ class TestCage(unittest.TestCase):
         r = w.bench("run", w.script("EXEC tools/which.py\n"))
         self.assertEqual(r.returncode, 0, r.stdout)
         self.assertEqual((w.session() / "out-1").read_text(), "/usr/bin:/bin\n")
+
+    # ---- no worker outlives its frame ----
+
+    DAEMON = ("import os, time\n"
+              "if os.fork() == 0:\n"
+              "    {detach}\n"
+              "    os.close(0); os.close(1); os.close(2)\n"
+              "    time.sleep(1.0)\n"
+              "    open('hold/late.txt', 'w').write('after the frame')\n"
+              "    os._exit(0)\n"
+              "print('parent done')\n")
+
+    def assert_no_late_write(self, detach):
+        w = addWorld(self)
+        w.tool("bg.py", self.DAEMON.format(detach=detach))
+        r = w.bench("run", w.script("EXEC tools/bg.py\nWAIT 0\n"))
+        self.assertEqual(r.returncode, 0, r.stdout)
+        time.sleep(1.6)                                    # past the moment the stray would write
+        self.assertFalse((w.root / "hold" / "late.txt").exists(), "a worker's child outlived its frame")
+        self.assertIn(" strays=1 ", (w.snaps()[1] / "MANIFEST").read_text())
+
+    def test_a_daemonized_child_dies_with_its_frame(self):
+        self.assert_no_late_write("pass")
+
+    def test_a_setsid_child_dies_with_its_frame(self):
+        # a new session escapes the process group; the subreaper still catches it
+        self.assert_no_late_write("os.setsid()")
+
+    def test_a_clean_tool_reports_no_strays(self):
+        w = addWorld(self)
+        self.assertEqual(w.bench("run", w.script("EXEC tools/hash.py main/hello.txt\n")).returncode, 0)
+        self.assertNotIn("strays=", (w.snaps()[1] / "MANIFEST").read_text())
 
     def test_landlock_denies_write_to_rom(self):
         w = addWorld(self)
