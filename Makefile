@@ -44,6 +44,10 @@ test: supervisor/bench supervisor/bench-helper supervisor/bus_test
 		$(PY) -m unittest discover -s tests/harness -p 'test_*.py' -q; \
 	fi
 
+# measurements (timing, machine-dependent): fork cost, N parallel worlds vs sequential.
+perf: supervisor/bench supervisor/bench-helper
+	$(PY) tests/perf/perf_fork.py
+
 demo: supervisor/bench
 	./supervisor/bench demo
 
@@ -64,4 +68,4 @@ clean:
 	-chmod -R u+rwX sessions 2>/dev/null   # snaps are sealed read-only; unseal before removing
 	find sessions -mindepth 1 ! -name .gitkeep ! -name OWNER_TOKEN -exec rm -rf {} +   # clean does not disarm
 
-.PHONY: all test demo e2e clean
+.PHONY: all test perf demo e2e clean

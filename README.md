@@ -38,7 +38,9 @@ make e2e                                  # fixture intern -> frames -> snaps ->
 ./supervisor/bench kill | demo | snap-ls
 ./supervisor/bench restore snap-<k> | <session>/snap-<k>
 ./supervisor/bench verify [snap-<k> | <session>/snap-<k>]   # content-hash integrity check
+./supervisor/bench fork snap-<k> | <session>/snap-<k> <new-world-dir>   # a new world from a verified snap
 ./supervisor/bench rules                  # the refusal table: rule id -> one-line fix
+make perf                                 # fork cost; N parallel worlds vs sequential
 ```
 
 Exit codes: 0 ok · 1 fault · 2 usage · 3 killed · 4 ROM changed · 5 not armed / disarmed ·
@@ -153,6 +155,24 @@ A finished snapshot is **evidence**, protected in two independent layers:
   `RETAIN`, `TAINT`, `RESTORE`).
 - `sessions/<id>/out-<n>` — step n's tool stdout+stderr, or the bytes a `READ` returned. The MANIFEST
   pins it: `out=out-<n> bytes=<b> sha256=<hex>`. A tool cannot write a line into the log.
+
+## Parallel worlds (`bench fork`)
+
+`bench fork snap-<k> <dir>` (owner, armed, ROM crowned) makes a complete new world beside this one:
+
+- the snap's `board=` and `tree=` must check out first (same checks as `restore`); nothing is written otherwise;
+- `main/`, `tools/`, `isa/`, `tests/rom/` are copied from this world, `hold/` from the snap — **copied,
+  never hard-linked**, so a write in one world can never reach another;
+- empty `proposed/`, `tests/proposed/`; a fresh `sessions/` holding only `FORKED_FROM`
+  (`forked_from=<world>/sessions/<id>/snap-<k>`, `tree=`, `board=`); `supervisor/` is used by path;
+- the new world is **not armed** — no token is copied; the owner arms it (or points several worlds at
+  one `BENCH_TOKEN`);
+- the result is checked (`main/`+`hold/` against `tree=`, `tests/rom` against the crown) before `FORK`
+  prints; a half-built world is removed. A target that exists, or one inside this world, is refused.
+
+Each world has its own `sessions/LOCK`, so N worlds run truly in parallel. `make perf` measures it
+(4 CPUs, 2026-09-28: fork 3.6 ms median; 4 worlds × a five-op script 1.28 s sequential, 0.34 s
+parallel, 3.7×; it fails below 1.5×).
 
 ## World lock
 

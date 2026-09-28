@@ -953,6 +953,148 @@ class TestRefusals(unittest.TestCase):
                 self.assertIn(f" rule={rid}", ev)
 
 
+class Forked(World):
+    """a world made by `bench fork`, not by copying the image. starts unarmed."""
+    def __init__(self, root):
+        self.root = Path(root)
+        self.env = dict(os.environ, BENCH_ROOT=str(self.root))
+        self.env.pop("BENCH_TOKEN", None)
+        self.token = self.root / OWNER_TOKEN
+
+
+def forkTarget(case):
+    base = Path(tempfile.mkdtemp(prefix="bench-f-"))
+    case.addCleanup(rmtree_force, base)
+    return base / "world"
+
+
+class TestFork(unittest.TestCase):
+    """bench fork <snap> <dir>: a verified snap becomes a new, unarmed world with its own lock."""
+
+    def source(self):
+        w = addWorld(self)
+        r = w.bench("run", w.script("WRITE fs hold/a one\nWRITE fs hold/b two\n"))
+        self.assertEqual(r.returncode, 0, r.stdout)
+        return w
+
+    def test_round_trip(self):
+        w = self.source()
+        snap = w.snaps()[1]                                    # after WRITE a, before WRITE b
+        t = forkTarget(self)
+        r = w.bench("fork", "snap-1", str(t))
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertRegex(r.stdout, r"FORK \S+/snap-1 -> \S+ tree=[0-9a-f]{12} ms=[0-9.]+ \(not armed")
+        self.assertEqual(sorted(p.name for p in (t / "hold").iterdir()), ["a"])
+        self.assertEqual((t / "main" / "hello.txt").read_text(), "hello bench\n")
+        for d in ("tools", "isa", "tests/rom", "proposed", "tests/proposed"):
+            self.assertTrue((t / d).is_dir(), d)
+        self.assertFalse((t / "supervisor").exists())         # binaries are used by path
+        origin = (t / "sessions" / "FORKED_FROM").read_text()
+        self.assertIn(f"/sessions/{w.session().name}/snap-1\n", origin)
+        tree = re.search(r"^tree=(\w+)$", (snap / "MANIFEST").read_text(), re.M).group(1)
+        self.assertIn(f"tree={tree}\n", origin)
+        f = Forked(t)
+        f.arm()
+        r = f.bench("run", f.script("READ fs hold/a\n"))
+        self.assertEqual(r.returncode, 0, r.stdout)
+        s0 = (f.snaps()[0] / "MANIFEST").read_text()
+        self.assertIn(f"tree={tree}\n", s0)                  # the fork's s0 is the snap's board
+
+    def test_session_slash_snap_form(self):
+        w = self.source()
+        t = forkTarget(self)
+        r = w.bench("fork", f"{w.session().name}/snap-2", str(t))
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertEqual(sorted(p.name for p in (t / "hold").iterdir()), ["a", "b"])
+
+    def test_damaged_snap_refused(self):
+        w = self.source()
+        f = w.snaps()[2] / "hold" / "b"
+        f.chmod(0o644)
+        f.write_text("tampered\n")
+        t = forkTarget(self)
+        r = w.bench("fork", "snap-2", str(t))
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("board hash mismatch", r.stdout)
+        self.assertFalse(t.exists())
+
+    def test_main_moved_since_the_snap_refused(self):
+        w = self.source()
+        (w.root / "main" / "hello.txt").write_text("changed\n")
+        t = forkTarget(self)
+        r = w.bench("fork", "snap-1", str(t))
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertFalse(t.exists())
+
+    def test_target_exists_refused(self):
+        w = self.source()
+        t = forkTarget(self)
+        t.mkdir()
+        (t / "keep").write_text("mine\n")
+        r = w.bench("fork", "snap-1", str(t))
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("exists", r.stdout)
+        self.assertEqual([p.name for p in t.iterdir()], ["keep"])
+
+    def test_target_inside_the_world_refused(self):
+        w = self.source()
+        r = w.bench("fork", "snap-1", str(w.root / "hold" / "w2"))
+        self.assertEqual(r.returncode, 2, r.stdout)
+        self.assertFalse((w.root / "hold" / "w2").exists())
+
+    def test_fork_needs_the_owner(self):
+        w = self.source()
+        w.disarm()
+        t = forkTarget(self)
+        self.assertEqual(w.bench("fork", "snap-1", str(t)).returncode, 5)
+        self.assertFalse(t.exists())
+
+    def test_unarmed_until_armed(self):
+        w = self.source()
+        t = forkTarget(self)
+        self.assertEqual(w.bench("fork", "snap-1", str(t)).returncode, 0)
+        f = Forked(t)
+        self.assertFalse(f.token.exists())
+        self.assertEqual(f.bench("run", f.script("WAIT 1\n")).returncode, 5)
+        f.arm()
+        self.assertEqual(f.bench("run", f.script("WAIT 1\n")).returncode, 0)
+
+    def test_a_write_in_one_world_never_reaches_the_other(self):
+        w = self.source()
+        t = forkTarget(self)
+        self.assertEqual(w.bench("fork", "snap-2", str(t)).returncode, 0)
+        f = Forked(t)
+        f.arm()
+        # copies, not links: no inode shared with the snap or the source's hold/
+        for name in ("a", "b"):
+            self.assertEqual((t / "hold" / name).stat().st_nlink, 1)
+            self.assertNotEqual((t / "hold" / name).stat().st_ino, (w.root / "hold" / name).stat().st_ino)
+        self.assertEqual(f.bench("run", f.script("WRITE fs hold/a forked\n")).returncode, 0)
+        self.assertEqual(w.bench("run", w.script("WRITE fs hold/b source\n", name="w2.ops")).returncode, 0)
+        self.assertEqual((w.root / "hold" / "a").read_text(), "one\n")
+        self.assertEqual((t / "hold" / "b").read_text(), "two\n")
+        self.assertEqual(w.bench("verify").returncode, 0)
+
+    def test_two_worlds_run_at_the_same_time(self):
+        w = self.source()
+        worlds = []
+        for i in range(2):
+            t = forkTarget(self)
+            self.assertEqual(w.bench("fork", "snap-2", str(t)).returncode, 0)
+            f = Forked(t)
+            f.arm()
+            worlds.append(f)
+        t0 = time.monotonic()
+        procs = [subprocess.Popen([str(BENCH), "run", f.script("WAIT 1500\n")], cwd=IMAGE, env=f.env,
+                                  stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+                 for f in worlds]
+        outs = [p.communicate(timeout=30)[0] for p in procs]
+        wall = time.monotonic() - t0
+        for p, out in zip(procs, outs):
+            self.assertEqual(p.returncode, 0, out)          # neither saw the other's lock (exit 7)
+        self.assertLess(wall, 2.8, "two 1.5 s worlds ran one after the other")
+
+
 class TestRetention(unittest.TestCase):
     """run keeps the newest M session dirs (default 20), counting its own."""
 

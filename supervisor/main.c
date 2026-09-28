@@ -1,4 +1,4 @@
-/* main.c — bench: run | kill | demo | snap-ls | status | restore | verify | rules
+/* main.c — bench: run | kill | demo | snap-ls | status | restore | verify | fork | rules
  *
  * the fixture intern is a text file of opcodes. one op per frame.
  * illegal lines die at birth, before a single frame runs.
@@ -1153,6 +1153,127 @@ static int cmd_restore(int argc, char **argv) {
     return 0;
 }
 
+/* ---- fork: a new world from a verified snapshot ----
+ * bench fork snap-<k> | <session>/snap-<k> <new-world-dir>
+ * an owner command, not an intern op. the snap's board= and tree= must check out before
+ * anything is written. the new world gets copies (never hard links: a write in one world must
+ * never reach another) of main/ tools/ isa/ tests/rom/ from this world and hold/ from the snap,
+ * empty proposed/ and tests/proposed/, and a fresh sessions/ holding only FORKED_FROM. the
+ * supervisor binaries are used by path, not copied. it is NOT armed: no token is copied, the
+ * owner arms it. it has its own sessions/LOCK, so worlds run in parallel. the new world is
+ * checked (main/+hold/ against tree=, tests/rom against the crown) before fork says ok; on any
+ * failure the half-built world is removed. */
+static int cmd_fork(int argc, char **argv) {
+    if (argc != 2) { fprintf(stderr, "usage: bench fork snap-<k> | <session>/snap-<k> <new-world-dir>\n"); return 2; }
+    char sid[128], sname[32], cdir[1024];
+    const char *arg = argv[0], *target = argv[1], *slash = strchr(arg, '/');
+    if (slash) {
+        size_t l = (size_t)(slash - arg);
+        if (l == 0 || l >= sizeof sid) { fprintf(stderr, "fork: bad session in %s\n", arg); return 2; }
+        memcpy(sid, arg, l);
+        sid[l] = 0;
+        snprintf(sname, sizeof sname, "%.31s", slash + 1);
+    } else {
+        if (current_dir(cdir, sizeof cdir, sid, sizeof sid)) { fprintf(stderr, "fork: no current session\n"); return 1; }
+        snprintf(sname, sizeof sname, "%.31s", arg);
+    }
+    char *end;
+    if (strncmp(sname, "snap-", 5) || !sname[5] || (strtoul(sname + 5, &end, 10), *end) ||
+        strchr(sid, '/') || strstr(sid, "..") || sid[0] == '.') {
+        fprintf(stderr, "fork: '%s' is not <session>/snap-<k>\n", arg);
+        return 2;
+    }
+    if (!target[0]) { fprintf(stderr, "fork: empty target\n"); return 2; }
+    struct stat st;
+    if (lstat(target, &st) == 0) { fprintf(stderr, "fork: %s exists — a fork makes a new world, never into one\n", target); return 1; }
+
+    /* a world inside this one would share its files through the back door: refuse. */
+    char rroot[4096], tparent[4096], rparent[4096];
+    const char *ts = strrchr(target, '/');
+    if (ts == target) snprintf(tparent, sizeof tparent, "/");
+    else if (ts) snprintf(tparent, sizeof tparent, "%.*s", (int)(ts - target), target);
+    else snprintf(tparent, sizeof tparent, ".");
+    if (!realpath(g_root, rroot) || !realpath(tparent, rparent)) {
+        fprintf(stderr, "fork: cannot resolve %s or %s: %s\n", g_root, tparent, strerror(errno));
+        return 1;
+    }
+    size_t rl = strlen(rroot);
+    if (!strncmp(rparent, rroot, rl) && (rparent[rl] == 0 || rparent[rl] == '/' || rl == 1)) {
+        fprintf(stderr, "fork: %s is inside this world — a fork lives beside it, not in it\n", target);
+        return 2;
+    }
+
+    if (rom_ok() != 0) return 4;
+    TokenId tok;
+    char tw[256];
+    if (!arm_read(&tok, tw, sizeof tw)) { fprintf(stderr, "fork: not armed — %s\n", tw); return 5; }
+
+    char odir[1024], snapdir[1100], man[1200], buf[2048], tree[80], board[80], now[65];
+    if (sessions_path(odir, sizeof odir, sid) || path_join(snapdir, sizeof snapdir, odir, sname) ||
+        path_join(man, sizeof man, snapdir, "MANIFEST") || read_small(man, buf, sizeof buf)) {
+        fprintf(stderr, "fork: no snap %s/%s\n", sid, sname);
+        return 1;
+    }
+    if (!kv(buf, "tree", tree, sizeof tree) || strlen(tree) != 64 ||
+        !kv(buf, "board", board, sizeof board) || strlen(board) != 64) {
+        fprintf(stderr, "fork: %s/%s holds no board — nothing to fork from\n", sid, sname);
+        return 1;
+    }
+    const char *bp[] = {"hold"}, *mh[] = {"main", "hold"};
+    if (tree_hash(snapdir, bp, 1, now) != 0 || strcmp(now, board)) {
+        fprintf(stderr, "fork: %s/%s stored hold is corrupt (board hash mismatch). nothing written.\n", sid, sname);
+        return 1;
+    }
+    const char *from_snap[] = {g_root, snapdir};
+    if (tree_hash_roots(from_snap, mh, 2, now) != 0 || strcmp(now, tree)) {
+        fprintf(stderr, "fork: %s/%s does not hash to its MANIFEST tree (main/ changed since). nothing written.\n",
+                sid, sname);
+        return 1;
+    }
+
+    /* claim the target: mkdir fails if anything got there first. from here, failure removes it. */
+    if (mkdir(target, 0755) != 0) { fprintf(stderr, "fork: cannot create %s: %s\n", target, strerror(errno)); return 1; }
+    uint64_t t0 = nowns();
+    char src[1200], dst[4200];
+    static const char *const FROM_WORLD[] = {"main", "tools", "isa", "tests/rom"};
+    static const char *const EMPTY[] = {"tests", "proposed", "tests/proposed", "sessions"};
+    int bad = 0;
+    for (size_t i = 0; !bad && i < sizeof EMPTY / sizeof *EMPTY; i++)
+        bad = snprintf(dst, sizeof dst, "%s/%s", target, EMPTY[i]) >= (int)sizeof dst || mkdir(dst, 0755) != 0;
+    for (size_t i = 0; !bad && i < sizeof FROM_WORLD / sizeof *FROM_WORLD; i++)
+        bad = path_join(src, sizeof src, g_root, FROM_WORLD[i]) ||
+              snprintf(dst, sizeof dst, "%s/%s", target, FROM_WORLD[i]) >= (int)sizeof dst ||
+              copy_board(src, dst) != 0;
+    if (!bad)
+        bad = path_join(src, sizeof src, snapdir, "hold") ||
+              snprintf(dst, sizeof dst, "%s/hold", target) >= (int)sizeof dst ||
+              copy_board(src, dst) != 0 || (mkdir(dst, 0755) != 0 && errno != EEXIST);
+    if (!bad) {
+        const char *rp[] = {"tests/rom"};
+        char rom[65];
+        if (tree_hash(target, mh, 2, now) != 0 || strcmp(now, tree)) {
+            fprintf(stderr, "fork: new world does not hash to the snap's tree. removed.\n");
+            bad = 1;
+        } else if (strcmp(ROM_HASH, "UNPINNED") && (tree_hash(target, rp, 1, rom) != 0 || strcmp(rom, ROM_HASH))) {
+            fprintf(stderr, "fork: new world's tests/rom does not match the crown. removed.\n");
+            bad = 1;
+        }
+    }
+    if (!bad) {
+        char text[1400];
+        snprintf(text, sizeof text, "forked_from=%s/sessions/%s/%s\ntree=%s\nboard=%s\n", rroot, sid, sname, tree, board);
+        bad = snprintf(dst, sizeof dst, "%s/sessions/FORKED_FROM", target) >= (int)sizeof dst || write_atomic(dst, text);
+    }
+    if (bad) {
+        if (errno) fprintf(stderr, "fork: building %s failed: %s. removed.\n", target, strerror(errno));
+        rm_tree(target);
+        return 1;
+    }
+    printf("FORK %s/%s -> %s tree=%.12s ms=%.1f (not armed: the owner arms it)\n", sid, sname, target, tree,
+           (double)(nowns() - t0) / 1e6);
+    return 0;
+}
+
 static int cmd_snap_ls(void) {
     char dir[1024], id[128];
     if (current_dir(dir, sizeof dir, id, sizeof id)) { fprintf(stderr, "snap-ls: no session\n"); return 1; }
@@ -1251,6 +1372,7 @@ int main(int argc, char **argv) {
     if (!strcmp(argv[1], "snap-ls")) return cmd_snap_ls();
     if (!strcmp(argv[1], "restore")) return cmd_restore(argc - 2, argv + 2);
     if (!strcmp(argv[1], "verify")) return cmd_verify(argc - 2, argv + 2);
+    if (!strcmp(argv[1], "fork")) return cmd_fork(argc - 2, argv + 2);
     if (!strcmp(argv[1], "rules") && argc == 2) {
         /* the refusal table, one rule per line: what the ROM mirror is checked against */
         for (unsigned i = 0; i < RULES_N; i++) printf("rule=%s fix: %s\n", RULES[i].id, RULES[i].fix);
@@ -1258,6 +1380,6 @@ int main(int argc, char **argv) {
     }
 usage:
     fprintf(stderr, "usage: bench status [--line] | run [--n N] [--hold-quota BYTES] [--hold-files N] [script|-]"
-                    " | kill | demo | snap-ls | restore snap-<k> | verify [snap-<k>] | rules\n");
+                    " | kill | demo | snap-ls | restore snap-<k> | verify [snap-<k>] | fork snap-<k> <dir> | rules\n");
     return 2;
 }
