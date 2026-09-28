@@ -1161,7 +1161,8 @@ static int cmd_restore(int argc, char **argv) {
  * bench fork snap-<k> | <session>/snap-<k> <new-world-dir>
  * an owner command, not an intern op. the snap's board= and tree= must check out before
  * anything is written. the new world gets copies (never hard links: a write in one world must
- * never reach another) of main/ tools/ isa/ tests/rom/ from this world and hold/ from the snap,
+ * never reach another) of main/ tools/ isa/ tests/rom/ supervisor/woz_bus.h from this world and
+ * hold/ from the snap,
  * empty proposed/ and tests/proposed/, and a fresh sessions/ holding only FORKED_FROM. the
  * supervisor binaries are used by path, not copied. it is NOT armed: no token is copied, the
  * owner arms it. it has its own sessions/LOCK, so worlds run in parallel. the new world is
@@ -1239,8 +1240,9 @@ static int cmd_fork(int argc, char **argv) {
     if (mkdir(target, 0755) != 0) { fprintf(stderr, "fork: cannot create %s: %s\n", target, strerror(errno)); return 1; }
     uint64_t t0 = nowns();
     char src[1200], dst[4200];
-    static const char *const FROM_WORLD[] = {"main", "tools", "isa", "tests/rom"};
-    static const char *const EMPTY[] = {"tests", "proposed", "tests/proposed", "sessions"};
+    /* supervisor/woz_bus.h: the one lamp-byte definition tools/peek.py reads. binaries stay by path. */
+    static const char *const FROM_WORLD[] = {"main", "tools", "isa", "tests/rom", "supervisor/woz_bus.h"};
+    static const char *const EMPTY[] = {"tests", "proposed", "tests/proposed", "sessions", "supervisor"};
     int bad = 0;
     for (size_t i = 0; !bad && i < sizeof EMPTY / sizeof *EMPTY; i++)
         bad = snprintf(dst, sizeof dst, "%s/%s", target, EMPTY[i]) >= (int)sizeof dst || mkdir(dst, 0755) != 0;

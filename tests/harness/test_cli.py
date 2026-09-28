@@ -988,7 +988,7 @@ class TestFork(unittest.TestCase):
         self.assertEqual((t / "main" / "hello.txt").read_text(), "hello bench\n")
         for d in ("tools", "isa", "tests/rom", "proposed", "tests/proposed"):
             self.assertTrue((t / d).is_dir(), d)
-        self.assertFalse((t / "supervisor").exists())         # binaries are used by path
+        self.assertEqual(sorted(p.name for p in (t / "supervisor").iterdir()), ["woz_bus.h"])  # binaries by path
         origin = (t / "sessions" / "FORKED_FROM").read_text()
         self.assertIn(f"/sessions/{w.session().name}/snap-1\n", origin)
         tree = re.search(r"^tree=(\w+)$", (snap / "MANIFEST").read_text(), re.M).group(1)
@@ -999,6 +999,16 @@ class TestFork(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stdout)
         s0 = (f.snaps()[0] / "MANIFEST").read_text()
         self.assertIn(f"tree={tree}\n", s0)                  # the fork's s0 is the snap's board
+
+    def test_peek_works_in_a_fork_world(self):
+        w = self.source()
+        t = forkTarget(self)
+        self.assertEqual(w.bench("fork", "snap-1", str(t)).returncode, 0)
+        f = Forked(t)
+        f.arm()
+        r = f.bench("run", f.script("EXEC tools/peek.py\n"))
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertIn("HOLD", (f.session() / "out-1").read_text())
 
     def test_session_slash_snap_form(self):
         w = self.source()

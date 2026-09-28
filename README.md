@@ -161,10 +161,11 @@ A finished snapshot is **evidence**, protected in two independent layers:
 `bench fork snap-<k> <dir>` (owner, armed, ROM crowned) makes a complete new world beside this one:
 
 - the snap's `board=` and `tree=` must check out first (same checks as `restore`); nothing is written otherwise;
-- `main/`, `tools/`, `isa/`, `tests/rom/` are copied from this world, `hold/` from the snap — **copied,
+- `main/`, `tools/`, `isa/`, `tests/rom/` and `supervisor/woz_bus.h` (what `peek.py` reads) are copied
+  from this world, `hold/` from the snap — **copied,
   never hard-linked**, so a write in one world can never reach another;
 - empty `proposed/`, `tests/proposed/`; a fresh `sessions/` holding only `FORKED_FROM`
-  (`forked_from=<world>/sessions/<id>/snap-<k>`, `tree=`, `board=`); `supervisor/` is used by path;
+  (`forked_from=<world>/sessions/<id>/snap-<k>`, `tree=`, `board=`); the binaries are used by path;
 - the new world is **not armed** — no token is copied; the owner arms it (or points several worlds at
   one `BENCH_TOKEN`);
 - the result is checked (`main/`+`hold/` against `tree=`, `tests/rom` against the crown) before `FORK`
