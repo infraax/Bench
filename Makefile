@@ -60,6 +60,17 @@ env:
 ledger-test:
 	@sh scripts/ledger-run.sh make test
 
+# the algebra only: the exhaustive bus test (C, no worker child) and the Ring-0 ROM suite (pure
+# python, no binary, no worker). what a hosted runner can prove. `make test` is the full gate:
+# it adds the harness, which runs worker children and needs a Linux box that can build their view.
+test-rom: supervisor/bus_test
+	@./supervisor/bus_test
+	@if $(PY) -c "import pytest" 2>/dev/null; then \
+		$(PY) -m pytest tests/rom -q; \
+	else \
+		$(PY) -m unittest discover -s tests/rom -p 'test_*.py' -q; \
+	fi
+
 demo: supervisor/bench
 	./supervisor/bench demo
 
@@ -80,4 +91,4 @@ clean:
 	-chmod -R u+rwX sessions 2>/dev/null   # snaps are sealed read-only; unseal before removing
 	find sessions -mindepth 1 ! -name .gitkeep ! -name OWNER_TOKEN -exec rm -rf {} +   # clean does not disarm
 
-.PHONY: all test perf env ledger-test demo e2e clean
+.PHONY: all test test-rom perf env ledger-test demo e2e clean
