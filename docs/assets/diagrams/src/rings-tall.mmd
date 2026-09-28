@@ -1,0 +1,16 @@
+%% SPDX-License-Identifier: MIT OR Apache-2.0
+%% source for docs/assets/diagrams/rings-tall.svg (the phone layout of rings.svg) (regenerate: see README.md in this folder)
+flowchart TB
+    subgraph ring0["Ring 0 — the owner's"]
+        main["main/"]
+        rom["tests/rom/ (ROM)"]
+        tools0["tools/"]
+        sess["sessions/ (token, snapshots)"]
+    end
+    subgraph quarantine["quarantine — the intern's, under quotas"]
+        hold["hold/"]
+        proposed["proposed/ · tests/proposed/"]
+    end
+    intern(["intern"]) -->|"WRITE, EXEC tools"| quarantine
+    proposed -->|"crown: owner moves the file, make bakes a new ROM hash"| ring0
+    intern -.->|"refused: rule=write-ring, EROFS in workers"| ring0

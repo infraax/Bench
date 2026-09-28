@@ -1,0 +1,21 @@
+%% SPDX-License-Identifier: MIT OR Apache-2.0
+%% source for docs/assets/diagrams/process.svg (regenerate: see README.md in this folder)
+flowchart LR
+    owner(["owner"])
+    intern(["intern (a script or an outside loop)"])
+    bench["bench run<br/>frame clock · gate · quotas · lamps"]
+    helper["bench-helper<br/>PING · ARM_OK · FRAME_OK"]
+    worker["worker child<br/>EXEC tools/*.py · TEST tests/rom/*.py<br/>world-only view · landlock · seccomp"]
+    lock[("sessions/LOCK")]
+    token[("OWNER_TOKEN")]
+    evidence[("sessions/ID/<br/>snap-k/ · out-n · log")]
+
+    owner -->|"arms"| token
+    owner -->|"starts"| bench
+    intern -->|"five verbs, one line per step"| bench
+    bench -->|"re-checks before every frame"| token
+    bench -->|"holds for the whole run"| lock
+    bench <-->|"mailbox: unix socket, parent-only"| helper
+    bench -->|"fork per EXEC / TEST, knife at T_tool"| worker
+    worker -->|"stdout + stderr pipe"| bench
+    bench -->|"snapshot after every step, sealed + sha256"| evidence

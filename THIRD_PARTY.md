@@ -20,7 +20,11 @@ generated `supervisor/rom_hash.h`.
 |---|---|---|---|
 | — | — | — | — |
 
-None. Bench does not vendor other harnesses or libraries. `docs/research/` stores only URLs, commit
+None. Bench does not vendor other harnesses or libraries. The site (`docs/`) ships no third-party
+JavaScript, CSS or fonts: `docs/assets/js/site.js` and `docs/assets/css/crypt.css` are project
+code. The diagrams in `docs/assets/diagrams/*.svg` are project drawings rendered once with
+[mermaid-cli](https://github.com/mermaid-js/mermaid-cli) 11 (MIT), a development tool that is
+not shipped; their Mermaid sources are in `docs/assets/diagrams/src/`. `docs/research/` stores only URLs, commit
 SHAs and line counts of the audited repos; `docs/research/fetch.sh` re-fetches them into a gitignored
 directory on demand.
 
