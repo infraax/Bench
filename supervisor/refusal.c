@@ -8,6 +8,7 @@
 const Rule RULES[] = {
     /* parse: the line dies at birth, before any frame */
     {"line-long",     "keep each line under 512 bytes"},
+    {"line-nul",      "scripts are text: remove the NUL byte from the line"},
     {"script-long",   "split the script: at most 64 ops per run"},
     {"verb-super",    "that word is the owner's; use one of READ WRITE EXEC TEST WAIT"},
     {"verb-unknown",  "use one of the five verbs: READ WRITE EXEC TEST WAIT"},

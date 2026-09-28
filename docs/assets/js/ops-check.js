@@ -18,7 +18,9 @@
 
   function bytes(s) { return typeof TextEncoder !== "undefined" ? new TextEncoder().encode(s).length : Buffer.byteLength(s); }
   function safeRel(p) { return p.length > 0 && p[0] !== "/" && p.indexOf("..") < 0; }
-  function upper(s) { return s.toUpperCase(); }
+  /* ASCII only, like strcasecmp: String.toUpperCase folds U+017F to "S" and U+0131 to "I",
+     so "TEſT" would pass here and fail in bench (found by tests/deep/fuzz_parse.py). */
+  function upper(s) { return s.replace(/[a-z]+/g, function (m) { return m.toUpperCase(); }); }
 
   /* split like tok(): spaces and tabs; returns {toks, rest(after n tokens)} */
   function take(s, n) {
@@ -39,6 +41,7 @@
 
   /* one line -> {kind: "blank"|"ok"|"parse"|"run", verb, rule, msg} */
   function line(raw) {
+    if (raw.indexOf("\u0000") >= 0) return fault("line-nul", "NUL byte in line");
     var ln = raw.replace(/[\r\n].*$/, "");
     var body = ln.replace(/^[ \t]+/, "");
     if (!body || body[0] === "#") return { kind: "blank" };

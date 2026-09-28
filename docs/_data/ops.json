@@ -223,5 +223,20 @@
   "line": "unplug radio",
   "expect": "supervisor",
   "rule": "verb-super"
+ },
+ {
+  "line": "WAIT 1\u0000",
+  "expect": "NUL byte",
+  "rule": "line-nul"
+ },
+ {
+  "line": "TEſT PURE tests/rom/test_isa.py",
+  "expect": "unknown verb",
+  "rule": "verb-unknown"
+ },
+ {
+  "line": "WAIT \u000b2",
+  "expect": "not a number",
+  "rule": "wait-shape"
  }
 ]

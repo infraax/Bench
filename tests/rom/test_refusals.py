@@ -15,6 +15,7 @@ from test_ops import OPS_TABLE  # noqa: E402
 RULES = {
     # parse: the line dies at birth, before any frame
     "line-long": "keep each line under 512 bytes",
+    "line-nul": "scripts are text: remove the NUL byte from the line",
     "script-long": "split the script: at most 64 ops per run",
     "verb-super": "that word is the owner's; use one of READ WRITE EXEC TEST WAIT",
     "verb-unknown": "use one of the five verbs: READ WRITE EXEC TEST WAIT",
@@ -94,6 +95,9 @@ OPS_RULES = {
     "KILL": "verb-super",
     "UNPLUG radio": "verb-super",
     "unplug radio": "verb-super",
+    "WAIT 1\x00": "line-nul",
+    "TE\u017fT PURE tests/rom/test_isa.py": "verb-unknown",
+    "WAIT \x0b2": "wait-shape",
 }
 
 ID = re.compile(r"[a-z][a-z0-9-]*\Z")

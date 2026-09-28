@@ -62,6 +62,10 @@ OPS_TABLE = [
     ("KILL", "supervisor"),
     ("UNPLUG radio", "supervisor"),
     ("unplug radio", "supervisor"),
+    # found by tests/deep/fuzz_parse.py (C vs the site mirror vs a real run)
+    ("WAIT 1\x00", "NUL byte"),                               # fgets saw "line too long"
+    ("TE\u017fT PURE tests/rom/test_isa.py", "unknown verb"),  # U+017F upper-cases to S outside C
+    ("WAIT \x0b2", "not a number"),                           # strtoul skipped the \v
 ]
 
 PARSE_REFUSALS = {"unknown verb", "supervisor"}
@@ -69,7 +73,8 @@ PARSE_REFUSALS = {"unknown verb", "supervisor"}
 
 def verb(line):
     word = line.split()[0]
-    return None if word.startswith("#") else word.upper()
+    # ASCII case only, like strcasecmp: str.upper() folds U+017F to "S"
+    return None if word.startswith("#") else "".join(c.upper() if c.isascii() else c for c in word)
 
 
 class TestOpsTable(unittest.TestCase):

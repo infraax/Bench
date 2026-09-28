@@ -53,6 +53,8 @@ struct Session {
     Bus      bus;            /* woz bits — lamps live here, we do not keep a second copy */
     uint32_t k;              /* next snap index: snap-<k>/ */
     int      prev_board;     /* index of the last snap that holds a board (-1: none) — delta source */
+    uint64_t frame_us;       /* the last frame's C-thread time (gate + checks + snap), for the log */
+    uint64_t tool_us;        /* the last frame's tool wall time */
     char     snap_id[24];
     char     ev[256];        /* evidence ticket of the current step; lands in the next MANIFEST */
     char     out[128];       /* the step's out-<n> file: name, bytes, sha256. MANIFEST out= */
@@ -73,6 +75,8 @@ extern pid_t g_keep_pid;
 extern unsigned g_strays;
 
 uint64_t nowns(void);
+#define T_TOOL_DEFAULT_MS 5000u   /* a child's wall clock unless a session says otherwise */
+void bus_foundation(Bus *b);   /* foundation plugs and caps: fs, tty wired; fb, judge, radio pulled */
 int  session_start(Session *s, const char *root, const char *dir,
                    uint32_t n, uint32_t k, uint32_t ts, uint32_t tt, uint32_t tS,
                    uint64_t hq, uint64_t hf);

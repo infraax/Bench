@@ -13,3 +13,4 @@ docs/research/clones/
 ledger/**
 !ledger/README.md
 !ledger/.gitkeep
+tests/deep/faultinj.so

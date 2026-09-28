@@ -5,6 +5,11 @@
   "phase": "parse"
  },
  {
+  "id": "line-nul",
+  "fix": "scripts are text: remove the NUL byte from the line",
+  "phase": "parse"
+ },
+ {
   "id": "script-long",
   "fix": "split the script: at most 64 ops per run",
   "phase": "parse"

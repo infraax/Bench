@@ -544,6 +544,7 @@ static int fault(Session *s, const char *fmt, ...) {
    return: 0 ok, >0 stopped at the gate (the exit code), -1 fault (snapped, then stopped). */
 int frame(Session *s, Op op, Tool tool, void *arg, int k_due) {
     uint64_t g0 = nowns();
+    s->frame_us = s->tool_us = 0;
     if (s->gate) {
         int g = s->gate(s);
         if (g > 0) return g;
@@ -557,7 +558,7 @@ int frame(Session *s, Op op, Tool tool, void *arg, int k_due) {
     /* do always. the tool is a child with its own timeout; that time is not the frame. */
     uint64_t tool_t0 = nowns();
     if (tool) rc = tool(s, arg);
-    uint64_t tool_ms = (nowns() - tool_t0) / 1000000ull;
+    uint64_t tool_ns = nowns() - tool_t0, tool_ms = tool_ns / 1000000ull;
     uint64_t c0 = nowns() - gate_ns;   /* T_frame: the gate's time counts, the tool's does not */
 
     /* TEST post-conditions: checked whatever the tool's rc, before the quota. */
@@ -610,8 +611,10 @@ int frame(Session *s, Op op, Tool tool, void *arg, int k_due) {
     }
 
     /* then inhibit */
+    uint64_t c_ns = nowns() - c0, c_ms = c_ns / 1000000ull, t_ms = (nowns() - s->t0_ns) / 1000000ull;
+    s->frame_us = c_ns / 1000ull;
+    s->tool_us = tool_ns / 1000ull;
     if (rc != 0) { s->bus.lamps = lamp_set(s->bus.lamps, LAMP_HOLD); return -1; }
-    uint64_t c_ms = (nowns() - c0) / 1000000ull, t_ms = (nowns() - s->t0_ns) / 1000000ull;
     if (c_ms > s->t_step_ms)
         return fault(s, "fault=T_frame ms=%llu>%u rule=t-frame", (unsigned long long)c_ms, s->t_step_ms);
     if (t_ms > s->t_sess_ms)
@@ -619,6 +622,17 @@ int frame(Session *s, Op op, Tool tool, void *arg, int k_due) {
     if (s->n > s->n_max) return fault(s, "fault=over-N n=%u>%u rule=over-n", s->n, s->n_max);
     if (k_due && snap(s, "K") != 0) return fault(s, "fault=snap-K n=%u rule=internal", s->n);
     return 0;
+}
+
+/* radio off by default. no eyes, no judge. fs and tty wired. one definition, shared by a real
+   session and `bench check`'s prediction, so the lint cannot drift from the board. */
+void bus_foundation(Bus *b) {
+    b->plug = (uint8_t)((1u << SLOT_N) - 1);
+    pull(b, SLOT_RADIO);
+    pull(b, SLOT_FB);
+    pull(b, SLOT_JUDGE);
+    b->cap[SLOT_FS] = 4096;
+    b->cap[SLOT_TTY] = 4096;
 }
 
 int session_start(Session *s, const char *root, const char *dir,
@@ -630,7 +644,7 @@ int session_start(Session *s, const char *root, const char *dir,
     s->k_snap = k ? k : 1;
     /* snap is a C hash now, so the frame is tens of ms again, not five seconds. */
     s->t_step_ms = ts ? ts : 200;    /* T_frame: C-owned work per step */
-    s->t_tool_ms = tt ? tt : 5000;   /* T_tool: a child's wall clock (python boot lives here) */
+    s->t_tool_ms = tt ? tt : T_TOOL_DEFAULT_MS;   /* T_tool: a child's wall clock (python boot lives here) */
     s->t_sess_ms = tS ? tS : 60000;
     s->t0_ns = nowns();
     snprintf(s->root, sizeof s->root, "%s", root);
@@ -639,13 +653,7 @@ int session_start(Session *s, const char *root, const char *dir,
     s->hold_files_quota = hf;
     if (hold_count(s, &s->hold_base, &s->hold_base_files) != 0) return -1;
 
-    /* radio off by default. no eyes, no judge. fs and tty wired. */
-    s->bus.plug = (uint8_t)((1u << SLOT_N) - 1);
-    pull(&s->bus, SLOT_RADIO);
-    pull(&s->bus, SLOT_FB);
-    pull(&s->bus, SLOT_JUDGE);
-    s->bus.cap[SLOT_FS] = 4096;
-    s->bus.cap[SLOT_TTY] = 4096;
+    bus_foundation(&s->bus);
     s->bus.lamps = lamp_set(s->bus.lamps, LAMP_HOLD); /* long notch starts in hold. main is a promotion. */
 
     /* frozen for the session. changing these is a new session. */

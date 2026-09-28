@@ -952,6 +952,100 @@ class TestOpsTable(unittest.TestCase):
                 self.assertNotIn(" MAIN", r.stdout)
 
 
+class TestCheck(unittest.TestCase):
+    """bench check: the planner's lint. same parser as run, refusals predicted from the
+    foundation board; nothing written, no token needed. held to the ROM table and to real runs."""
+
+    def check(self, w, text, *args):
+        return subprocess.run([str(BENCH), "check", *args, "-"], cwd=IMAGE, env=w.env, input=text,
+                              stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=30)
+
+    @staticmethod
+    def verdict(out):
+        stop = re.search(r"^stop line=\d+ rule=(\S+)$", out, re.M)
+        return stop.group(1) if stop else "ok"
+
+    def test_check_agrees_with_the_rom_ops_table(self):
+        sys.path.insert(0, str(IMAGE / "tests" / "rom"))
+        from test_ops import OPS_TABLE
+        from test_refusals import OPS_RULES
+        w = addWorld(self)
+        for line, expect in OPS_TABLE:
+            with self.subTest(line=line):
+                r = self.check(w, line + "\n")
+                want = "ok" if expect == "ok" else OPS_RULES[line]
+                self.assertEqual(self.verdict(r.stdout), want, r.stdout)
+                self.assertEqual(r.returncode, 0 if want == "ok" else 1, r.stdout)
+
+    def test_check_predicts_what_run_does(self):
+        # the oracle: the prediction is held to the binary running the same script.
+        w = addWorld(self)
+        scripts = ["WAIT 1\n", "WAIT 5001\n", "READ tty main/hello.txt\n", "WRITE radio hold/x a\n",
+                   "TEST VISUAL tests/rom/test_isa.py\n", "EXEC tools/hash.py " + "a " * 17 + "\n",
+                   "WAIT 1\n" * 9, "WAIT 1\nREAD fb main/hello.txt\nWAIT 1\n", "WAIT 1\nFOO\n",
+                   "WRITE fs main/x y\n", "wait\t2\n"]
+        for i, text in enumerate(scripts):
+            with self.subTest(script=text):
+                c = self.check(w, text)
+                r = w.bench("run", w.script(text, name=f"oracle{i}.ops"))
+                self.assertEqual(c.returncode, r.returncode, c.stdout + r.stdout)
+                rule = self.verdict(c.stdout)
+                if rule != "ok":
+                    self.assertIn("rule=" + rule, r.stdout)
+                frames = int(re.search(r"frames=(\d+)", c.stdout).group(1))
+                self.assertEqual(frames, len(re.findall(r"^frame \d+", r.stdout, re.M)), c.stdout + r.stdout)
+
+    def test_check_needs_no_token_and_writes_nothing(self):
+        w = addWorld(self)
+        (w.root / "sessions" / "OWNER_TOKEN").unlink()
+        before = sorted(p.relative_to(w.root) for p in w.root.rglob("*"))
+        r = self.check(w, "WAIT 1\nWRITE fs hold/x y\n")
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertIn("check ops=2 frames=2 exit=0", r.stdout)
+        self.assertEqual(sorted(p.relative_to(w.root) for p in w.root.rglob("*")), before)
+
+    def test_check_reports_every_line_and_the_first_stop(self):
+        w = addWorld(self)
+        r = self.check(w, "WAIT 1\nFOO\nWRITE fs main/x y\n")
+        self.assertIn("line 2 parse rule=verb-unknown", r.stdout)
+        self.assertIn("line 3 parse rule=write-ring", r.stdout)
+        self.assertIn("stop line=2 rule=verb-unknown", r.stdout)
+        self.assertIn("frames=0", r.stdout)
+
+    def test_check_long_line_and_long_script(self):
+        w = addWorld(self)
+        r = self.check(w, "WRITE fs hold/x " + "a" * 600 + "\nWAIT 1\n")
+        self.assertIn("line 1 parse rule=line-long", r.stdout)
+        self.assertIn("line 2 ok WAIT", r.stdout)
+        r = self.check(w, "WAIT 1\n" * 65)
+        self.assertIn("line 65 parse rule=script-long", r.stdout)
+
+    def test_check_honours_n(self):
+        w = addWorld(self)
+        self.assertIn("stop line=3 rule=over-n", self.check(w, "WAIT 1\n" * 3, "--n", "2").stdout)
+        self.assertEqual(self.check(w, "WAIT 1\n", "--n", "0").returncode, 2)
+
+
+class TestStats(unittest.TestCase):
+    """bench stats: per-verb frame and tool time from the session log's FRAME lines."""
+
+    def test_stats_counts_every_frame(self):
+        w = addWorld(self)
+        self.assertEqual(w.bench("run", w.script("WAIT 1\nWRITE fs hold/a b\nEXEC tools/hash.py hold/a\n")).returncode, 0)
+        log = (w.session() / "log").read_text()
+        self.assertEqual(len(re.findall(r"^FRAME n=\d+ op=\w+ frame_us=\d+ tool_us=\d+ rc=0$", log, re.M)), 3)
+        r = w.bench("stats")
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertIn("frames=3", r.stdout)
+        for verb in ("WAIT", "WRITE", "EXEC"):
+            self.assertRegex(r.stdout, rf"(?m)^{verb}\s+1\s")
+        self.assertRegex(r.stdout, r"headroom worst_frame_us=\d+ T_frame_ms=200 used=\d+%")
+
+    def test_stats_refuses_a_path_for_a_session(self):
+        w = addWorld(self)
+        self.assertEqual(w.bench("stats", "../etc").returncode, 2)
+
+
 class TestRefusals(unittest.TestCase):
     """every refusal prints rule=<id> and its fix; the C table is the ROM table."""
 
@@ -1177,6 +1271,21 @@ class TestRetention(unittest.TestCase):
         self.assertTrue(set(names[-19:]) <= set(left))             # the newest old ones
         self.assertFalse(set(names[:6]) & set(left))
         self.assertIn("RETAIN keep=20 removed=6", (w.session() / "log").read_text())
+
+    def test_a_cut_short_retirement_is_cleaned_not_counted(self):
+        # retention renames a session to .retired-<id> before deleting it, so a delete cut short
+        # (full disk, crash) leaves no half-session behind; the next run removes the leftover.
+        w = addWorld(self)
+        left = w.root / "sessions" / ".retired-1000000000-100"
+        (left / "snap-3").mkdir(parents=True)
+        (left / "snap-3" / "MANIFEST").write_text("snap=x\n")
+        (left / "snap-3").chmod(0o555)
+        self.assertEqual(w.bench("run", w.script("WAIT 1\n")).returncode, 0)
+        self.assertFalse(left.exists())
+        self.assertEqual(self.session_dirs(w), [w.session().name])
+        (w.root / "sessions" / ".retired-notasession").mkdir()
+        self.assertEqual(w.bench("run", w.script("WAIT 1\n")).returncode, 0)
+        self.assertTrue((w.root / "sessions" / ".retired-notasession").exists())   # only its own names
 
     def test_keep_flag_and_env(self):
         w = addWorld(self)

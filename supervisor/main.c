@@ -117,6 +117,30 @@ static int copy_field(char *dst, size_t n, const char *src) {
     return 0;
 }
 
+/* one script line, read by length (fgets cannot see past a NUL byte): up to n-1 bytes kept, the
+   rest counted. returns the line's byte count without its newline, -1 at end of input.
+   *nul: the line held a NUL byte, which no text parser here can see past. */
+static long read_line(FILE *f, char *buf, size_t n, int *nul) {
+    long len = 0;
+    int c;
+    *nul = 0;
+    while ((c = fgetc(f)) != EOF && c != '\n') {
+        if (c == 0) *nul = 1;
+        if ((size_t)len < n - 1) buf[len] = (char)c;
+        len++;
+    }
+    if (c == EOF && len == 0) return -1;
+    buf[(size_t)len < n - 1 ? (size_t)len : n - 1] = 0;
+    return len;
+}
+
+/* the line-level refusals, before parse_line: too long, or not text. */
+static const char *line_bad(long len, int nul) {
+    if (len >= LINE_BYTES - 1) return "line-long";
+    if (nul) return "line-nul";
+    return NULL;
+}
+
 /* every parse refusal names its rule (refusal.c); the caller prints the fix under it. */
 #define FAULT(r, ...) do { snprintf(err, errsz, __VA_ARGS__); *rule = (r); return -1; } while (0)
 
@@ -183,7 +207,10 @@ static int parse_line(char *ln, int lineno, Instr *in, char *err, size_t errsz, 
         char *end;
         errno = 0;
         unsigned long ms = strtoul(a, &end, 10);
-        if (errno || *end || a[0] == '-' || ms > 3600000ul) FAULT("wait-shape", "WAIT <ms> not a number: %.160s", a);
+        /* digits, optionally after one '+'. strtoul alone would also skip leading \v \f and take
+           a '-' (found by tests/deep/fuzz_parse.py: "WAIT \v2" ran as WAIT 2). */
+        int lead = (a[0] >= '0' && a[0] <= '9') || (a[0] == '+' && a[1] >= '0' && a[1] <= '9');
+        if (!lead || errno || *end || ms > 3600000ul) FAULT("wait-shape", "WAIT <ms> not a number: %.160s", a);
         if (*trim(p)) FAULT("wait-shape", "WAIT takes <ms> only");
         in->ms = (uint32_t)ms;
         return 1;
@@ -212,8 +239,9 @@ static int out_open(Session *s, char *name, size_t n) {
     return open(p, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
 }
 
-/* close the step's out file and pin it in s->out. */
-static void out_close(Session *s, int fd, const char *name) {
+/* close the step's out file and pin it in s->out. -1: it could not be read back, so it is not
+   pinned (sha256=unreadable) and the step must not pass (found by tests/deep/fault_sweep.py). */
+static int out_close(Session *s, int fd, const char *name) {
     char p[1100], hex[65] = "unreadable";
     if (fd >= 0) close(fd);
     uint64_t bytes = 0;
@@ -230,6 +258,7 @@ static void out_close(Session *s, int fd, const char *name) {
         }
     }
     snprintf(s->out, sizeof s->out, "%s bytes=%llu sha256=%s", name, (unsigned long long)bytes, hex);
+    return strcmp(hex, "unreadable") ? 0 : -1;
 }
 
 /* ---- symlink-safe file access anchored at the world root ----
@@ -304,7 +333,7 @@ static int t_read(Session *s, void *arg) {
     int fd = out_open(s, name, sizeof name);
     if (fd < 0) return ev(s, 1, "op=read path=%s err=cannot open out file rule=internal", in->path);
     int bad = n && write(fd, buf, n) != (ssize_t)n;
-    out_close(s, fd, name);
+    if (out_close(s, fd, name)) return ev(s, 1, "op=read path=%s err=%s not pinned rule=internal", in->path, name);
     if (bad) return ev(s, 1, "op=read path=%s err=short write to %s rule=internal", in->path, name);
     dprintf(g_log, "READ fs %s %zu bytes -> %s\n", in->path, n, name);
     return ev(s, 0, "op=read kind=none slot=fs path=%s bytes=%zu dirty=0", in->path, n);
@@ -366,13 +395,14 @@ static int t_exec(Session *s, void *arg) {
     if (fd < 0) return ev(s, 1, "op=exec prog=%s err=cannot open out file rule=internal", in->slot);
     dprintf(g_log, "EXEC %s %s -> %s\n", in->slot, in->rest, name);
     int rc = child_run(s->root, argv, JAIL_FULL, NULL, 0, &nb, s->t_tool_ms, OUT_CEIL_BYTES, fd, fd);
-    out_close(s, fd, name);
+    int unpinned = out_close(s, fd, name);
     if (rc == -2) return ev(s, 1, "knife op=exec prog=%s timeout>%ums rule=t-tool", in->slot, s->t_tool_ms);
     if (rc == -3) return ev(s, 1, "halt op=exec prog=%s child killed rule=kill", in->slot);
     if (rc == -4) return ev(s, 1, "leash op=exec prog=%s out>%u killed rule=out-ceil", in->slot, OUT_CEIL_BYTES);
     if (rc == -5) return ev(s, 1, "deny op=exec prog=%s sandbox SIGSYS rule=sandbox", in->slot);
     if (rc == -6) return ev(s, 1, "deny op=exec prog=%s worker not started rule=worker-setup", in->slot);
     if (nb > s->bus.cap[SLOT_TTY]) return ev(s, 1, "leash op=exec out=%llu>%u rule=tty-cap", (unsigned long long)nb, s->bus.cap[SLOT_TTY]);
+    if (unpinned) return ev(s, 1, "op=exec prog=%s err=%s not pinned rule=internal", in->slot, name);
     if (g_strays)
         return ev(s, rc != 0, "op=exec kind=none slot=%s rc=%d out=%llu strays=%u dirty=0", in->slot, rc,
                   (unsigned long long)nb, g_strays);
@@ -397,13 +427,14 @@ static int t_test(Session *s, void *arg) {
     if (fd < 0) return ev(s, 1, "op=test path=%s err=cannot open out file rule=internal", in->path);
     dprintf(g_log, "TEST %s %s -> %s\n", in->slot, in->path, name);
     int rc = child_run(s->root, argv, JAIL_NET_ONLY, out, sizeof out, NULL, s->t_tool_ms, OUT_CEIL_BYTES, fd, fd);
-    out_close(s, fd, name);
+    int unpinned = out_close(s, fd, name);
     out[strcspn(out, "\r\n")] = 0;
     if (rc == -2) return ev(s, 1, "knife op=test path=%s timeout>%ums rule=t-tool", in->path, s->t_tool_ms);
     if (rc == -3) return ev(s, 1, "halt op=test path=%s child killed rule=kill", in->path);
     if (rc == -4) return ev(s, 1, "leash op=test path=%s out>%u killed rule=out-ceil", in->path, OUT_CEIL_BYTES);
     if (rc == -5) return ev(s, 1, "deny op=test path=%s sandbox SIGSYS rule=sandbox", in->path);
     if (rc == -6) return ev(s, 1, "deny op=test path=%s worker not started rule=worker-setup", in->path);
+    if (unpinned) return ev(s, 1, "op=test path=%s err=%s not pinned rule=internal", in->path, name);
     return ev(s, rc != 0, "op=test kind=%s slot=fs path=%s rc=%d result=\"%s\" dirty=0",
               !strcmp(in->slot, "PURE") ? "pure" : "scalar", in->path, rc, out);
 }
@@ -733,10 +764,30 @@ static int retain(unsigned keep) {
     closedir(d);
     if (n) qsort(v, n, sizeof *v, sess_newest_first);   /* qsort(NULL, 0) is UB; no sessions = no sort */
     int removed = 0;
+    /* a session is retired whole or not at all: renamed out of the session namespace first, then
+       deleted. a delete cut short leaves .retired-<id> (not a session, cleaned next time), never a
+       half-deleted session that reads as torn evidence (found by tests/deep/fault_sweep.py). */
     for (size_t i = keep > 0 ? keep - 1 : 0; i < n; i++) {   /* keep-1 old + the new one = keep */
-        char p[1100];
+        char p[1100], gone[1100], name[80];
         if (!strcmp(v[i].name, cur) || path_join(p, sizeof p, sdir, v[i].name) || exists(p, "hold.before")) continue;
-        if (rm_tree(p) == 0) removed++;
+        snprintf(name, sizeof name, ".retired-%s", v[i].name);
+        if (path_join(gone, sizeof gone, sdir, name) || rename(p, gone) != 0) continue;
+        if (rm_tree(gone) == 0) removed++;
+    }
+    /* leftovers of a retirement a crash or a full disk cut short */
+    if ((d = opendir(sdir)) != NULL) {
+        char left[64][80];
+        int nl = 0;
+        while ((e = readdir(d)) != NULL && nl < 64) {
+            long long ep;
+            if (!strncmp(e->d_name, ".retired-", 9) && is_session_name(e->d_name + 9, &ep))
+                memcpy(left[nl++], e->d_name, strlen(e->d_name) + 1);   /* 9 + is_session_name (< 64) */
+        }
+        closedir(d);
+        for (int i = 0; i < nl; i++) {
+            char p[1100];
+            if (path_join(p, sizeof p, sdir, left[i]) == 0) rm_tree(p);
+        }
     }
     free(v);
     return removed;
@@ -830,11 +881,16 @@ static int cmd_run(int argc, char **argv) {
     int nops = 0, ln = 0;
     char line[LINE_BYTES], err[256];
     const char *rule = "internal";
-    while (fgets(line, sizeof line, f)) {
+    long len;
+    int nul;
+    while ((len = read_line(f, line, sizeof line, &nul)) >= 0) {
         ln++;
-        if (!strchr(line, '\n') && !feof(f)) {
-            fprintf(stderr, "FAULT line %d: line too long\n", ln);
-            rule_say(stderr, "rule=line-long");
+        const char *lb = line_bad(len, nul);
+        if (lb) {
+            char rl[48];
+            fprintf(stderr, "FAULT line %d: %s\n", ln, !strcmp(lb, "line-long") ? "line too long" : "NUL byte in line");
+            snprintf(rl, sizeof rl, "rule=%s", lb);
+            rule_say(stderr, rl);
             return 1;
         }
         int r = parse_line(line, ln, &prog[nops < MAX_OPS ? nops : MAX_OPS - 1], err, sizeof err, &rule);
@@ -927,6 +983,10 @@ static int cmd_run(int argc, char **argv) {
         s.out[0] = 0;
         int k_due = ((s.n + 1) % s.k_snap) == 0;
         int fr = frame(&s, prog[i].op, TOOL[prog[i].op], &prog[i], k_due);
+        /* per-frame cost, for `bench stats`: the C thread's own time and the tool's, per verb */
+        if (fr <= 0)
+            dprintf(g_log, "FRAME n=%u op=%s frame_us=%llu tool_us=%llu rc=%d\n", s.n, OP_NAME[prog[i].op],
+                    (unsigned long long)s.frame_us, (unsigned long long)s.tool_us, fr);
         if (fr > 0) {
             /* stopped at the gate: this op never ran and has no snap */
             session_state(&s, fr == 3 ? "halt" : fr == 5 ? "disarmed" : "fault");   /* 6: helper lost */
@@ -959,7 +1019,13 @@ static int cmd_run(int argc, char **argv) {
             break;
         }
     }
-    if (rc == 0) session_state(&s, "ok");
+    /* exit 0 is a claim that STATE says ok; a STATE that could not be written is a fault, not
+       a clean run that `status` then calls crashed (found by tests/deep/fault_sweep.py). */
+    if (rc == 0 && session_state(&s, "ok") != 0) {
+        fprintf(stderr, "FAULT end: STATE not recorded\n");
+        rule_say(stderr, "rule=internal");
+        rc = 1;
+    }
     mb_close(&g_mb);
     close(g_log);
     if (path_join(path, sizeof path, dir, "PID") == 0) unlink(path);
@@ -1363,6 +1429,182 @@ static int cmd_verify(int argc, char **argv) {
     return rc;
 }
 
+/* ---- check: the planner's lint ----
+ * bench check [--n N] [script|-]: every line through parse_line (the run's own parser), then the
+ * refusals a frame would make before touching the world, predicted from the foundation board
+ * (bus_foundation, T_tool). no token, no lock, no session, nothing written. one line per script
+ * line — "line <n> blank|ok|parse|run [VERB] [rule=<id> <why>]" — then the verdict a run would
+ * reach: "check ops= frames= exit=" and, if it stops, "stop line= rule=". exit: what `run`
+ * would exit with for a static reason (0 clean, 1 refused), 2 usage. a clean check does not
+ * promise a clean run: files, tools and quotas are only known inside a frame. */
+static const char *predict(const Instr *in, const Bus *bus, char *why, size_t n) {
+    int sl;
+    switch (in->op) {
+    case OP_READ:
+    case OP_WRITE:
+        sl = slot_of(in->slot);
+        if (sl < 0) { snprintf(why, n, "deny slot=%.64s unknown", in->slot); return "slot-unknown"; }
+        if (!plugged(bus, sl)) { snprintf(why, n, "deny slot=%.64s unplugged", in->slot); return "slot-pulled"; }
+        if (sl != SLOT_FS) { snprintf(why, n, "deny slot=%.64s no device in foundation", in->slot); return "slot-pulled"; }
+        if (in->op == OP_WRITE && strlen(in->rest) + (in->rest[0] ? 1 : 0) > bus->cap[SLOT_FS]) {
+            snprintf(why, n, "leash op=write bytes>%u", bus->cap[SLOT_FS]);
+            return "fs-cap";
+        }
+        return NULL;
+    case OP_EXEC: {
+        if (!plugged(bus, SLOT_FS)) { snprintf(why, n, "deny slot=fs unplugged"); return "slot-pulled"; }
+        char args[256], *q = args;
+        int c = 2;
+        memcpy(args, in->rest, sizeof args);
+        while (tok(&q) != NULL)
+            if (c++ >= MAX_ARGV + 2) { snprintf(why, n, "op=exec too many args"); return "exec-argc"; }
+        return NULL;
+    }
+    case OP_TEST:
+        if (!strcmp(in->slot, "JUDGE")) { snprintf(why, n, "deny op=test kind=judge judge/radio unplugged"); return "judge-pulled"; }
+        if (!strcmp(in->slot, "VISUAL")) { snprintf(why, n, "deny op=test kind=visual fb unplugged"); return "visual-pulled"; }
+        return NULL;
+    case OP_WAIT:
+        if (in->ms > T_TOOL_DEFAULT_MS) { snprintf(why, n, "op=wait ms=%u > T_tool=%u", in->ms, T_TOOL_DEFAULT_MS); return "t-tool"; }
+        return NULL;
+    default:
+        return NULL;
+    }
+}
+
+static int cmd_check(int argc, char **argv) {
+    unsigned long nmax = N_MAX_DEFAULT;
+    const char *script = NULL;
+    for (int i = 0; i < argc; i++) {
+        if (!strcmp(argv[i], "--n") && i + 1 < argc) {
+            char *end;
+            nmax = strtoul(argv[++i], &end, 10);
+            if (*end || nmax == 0 || nmax > N_CEIL) { fprintf(stderr, "check: N out of range 1..%d\n", N_CEIL); return 2; }
+        } else if (!script) script = argv[i];
+        else { fprintf(stderr, "usage: bench check [--n N] [script|-]\n"); return 2; }
+    }
+    FILE *f = (script && strcmp(script, "-")) ? fopen(script, "r") : stdin;
+    if (!f) { fprintf(stderr, "check: cannot open %s: %s\n", script, strerror(errno)); return 2; }
+    Bus bus;
+    memset(&bus, 0, sizeof bus);
+    bus_foundation(&bus);
+    char line[LINE_BYTES], err[256], why[256];
+    int ln = 0, ops = 0, frames = 0, stop_line = 0, parse_fault = 0;
+    const char *stop_rule = NULL;
+    long len;
+    int nul;
+    while ((len = read_line(f, line, sizeof line, &nul)) >= 0) {
+        ln++;
+        const char *lb = line_bad(len, nul);
+        if (lb) {
+            printf("line %d parse rule=%s %s\n", ln, lb, !strcmp(lb, "line-long") ? "line too long" : "NUL byte in line");
+            if (!parse_fault) { parse_fault = 1; stop_line = ln; stop_rule = lb; }
+            continue;
+        }
+        Instr in;
+        const char *rule = "internal";
+        int r = parse_line(line, ln, &in, err, sizeof err, &rule);
+        if (r == 0) { printf("line %d blank\n", ln); continue; }
+        if (r < 0) {
+            printf("line %d parse rule=%s %s\n", ln, rule, err);
+            if (!parse_fault) { parse_fault = 1; stop_line = ln; stop_rule = rule; }
+            continue;
+        }
+        if (++ops > MAX_OPS) {
+            printf("line %d parse rule=script-long script over %d ops\n", ln, MAX_OPS);
+            if (!parse_fault) { parse_fault = 1; stop_line = ln; stop_rule = "script-long"; }
+            continue;
+        }
+        const char *deny = predict(&in, &bus, why, sizeof why);
+        if (deny) printf("line %d run %s rule=%s %s\n", ln, OP_NAME[in.op], deny, why);
+        else printf("line %d ok %s\n", ln, OP_NAME[in.op]);
+        if (parse_fault || stop_rule) continue;
+        if ((unsigned long)frames >= nmax) { stop_line = ln; stop_rule = "over-n"; continue; }
+        frames++;
+        if (deny) { stop_line = ln; stop_rule = deny; }
+    }
+    if (f != stdin) fclose(f);
+    int exit_rc = stop_rule ? 1 : 0;
+    printf("check ops=%d frames=%d exit=%d\n", ops, parse_fault ? 0 : frames, exit_rc);
+    if (stop_rule) printf("stop line=%d rule=%s\n", stop_line, stop_rule);
+    return exit_rc;
+}
+
+/* ---- stats: where a session's time went ----
+ * bench stats [<session>]: the FRAME lines of sessions/<id>/log, per verb: count, frame_us
+ * p50/p95/max (the C thread's own work, against T_frame) and tool_us p50/max. */
+typedef struct { unsigned long long v[512]; int n; } Series;
+
+static int u64_cmp(const void *a, const void *b) {
+    unsigned long long x = *(const unsigned long long *)a, y = *(const unsigned long long *)b;
+    return x < y ? -1 : x > y;
+}
+
+static unsigned long long pct(Series *s, int p) {
+    if (!s->n) return 0;
+    qsort(s->v, (size_t)s->n, sizeof *s->v, u64_cmp);
+    int i = (s->n * p + 99) / 100 - 1;
+    return s->v[i < 0 ? 0 : i];
+}
+
+static int cmd_stats(int argc, char **argv) {
+    char dir[1024], id[128], path[1100], line[512];
+    if (argc > 1) { fprintf(stderr, "usage: bench stats [<session>]\n"); return 2; }
+    if (argc == 1) {
+        long long ep;
+        if (!is_session_name(argv[0], &ep) || sessions_path(dir, sizeof dir, argv[0])) {
+            fprintf(stderr, "stats: '%s' is not a session id\n", argv[0]);
+            return 2;
+        }
+        snprintf(id, sizeof id, "%s", argv[0]);
+    } else if (current_dir(dir, sizeof dir, id, sizeof id)) {
+        fprintf(stderr, "stats: no session\n");
+        return 1;
+    }
+    if (path_join(path, sizeof path, dir, "log")) return 1;
+    FILE *f = fopen(path, "r");
+    if (!f) { fprintf(stderr, "stats: no log for %s\n", id); return 1; }
+    static Series fr[OP_WAIT + 1], tl[OP_WAIT + 1];
+    memset(fr, 0, sizeof fr);
+    memset(tl, 0, sizeof tl);
+    unsigned long long worst = 0;
+    int frames = 0;
+    while (fgets(line, sizeof line, f)) {
+        char op[16];
+        unsigned long long fu, tu;
+        unsigned n;
+        int rc;
+        if (sscanf(line, "FRAME n=%u op=%15s frame_us=%llu tool_us=%llu rc=%d", &n, op, &fu, &tu, &rc) != 5) continue;
+        for (int o = OP_READ; o <= OP_WAIT; o++) {
+            if (strcmp(op, OP_NAME[o]) || fr[o].n >= 512) continue;
+            fr[o].v[fr[o].n++] = fu;
+            tl[o].v[tl[o].n++] = tu;
+        }
+        if (fu > worst) worst = fu;
+        frames++;
+    }
+    fclose(f);
+    printf("stats %s frames=%d\n", id, frames);
+    if (!frames) return 0;
+    printf("%-6s %5s %12s %12s %12s %12s %12s\n", "verb", "n", "frame_p50us", "frame_p95us", "frame_maxus", "tool_p50us", "tool_maxus");
+    for (int o = OP_READ; o <= OP_WAIT; o++) {
+        if (!fr[o].n) continue;
+        int n = fr[o].n;
+        unsigned long long f50 = pct(&fr[o], 50), f95 = pct(&fr[o], 95), fmx = fr[o].v[n - 1];
+        unsigned long long t50 = pct(&tl[o], 50), tmx = tl[o].v[n - 1];
+        printf("%-6s %5d %12llu %12llu %12llu %12llu %12llu\n", OP_NAME[o], n, f50, f95, fmx, t50, tmx);
+    }
+    /* T_frame is the session's; the foundation default unless SESSION says otherwise */
+    unsigned long long tf = 200;
+    char sess[2048], v[32];
+    if (path_join(path, sizeof path, dir, "SESSION") == 0 && read_small(path, sess, sizeof sess) == 0 &&
+        kv(sess, "T_frame_ms", v, sizeof v))
+        tf = strtoull(v, NULL, 10);
+    printf("headroom worst_frame_us=%llu T_frame_ms=%llu used=%llu%%\n", worst, tf,
+           tf ? worst / 10ull / tf : 0);
+    return 0;
+}
+
 int main(int argc, char **argv) {
     /* orphans of a worker reparent to bench, not init, so no worker outlives its frame (frame.c) */
     prctl(PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0);
@@ -1381,6 +1623,8 @@ int main(int argc, char **argv) {
     if (!strcmp(argv[1], "restore")) return cmd_restore(argc - 2, argv + 2);
     if (!strcmp(argv[1], "verify")) return cmd_verify(argc - 2, argv + 2);
     if (!strcmp(argv[1], "fork")) return cmd_fork(argc - 2, argv + 2);
+    if (!strcmp(argv[1], "check")) return cmd_check(argc - 2, argv + 2);
+    if (!strcmp(argv[1], "stats")) return cmd_stats(argc - 2, argv + 2);
     if (!strcmp(argv[1], "rules") && argc == 2) {
         /* the refusal table, one rule per line: what the ROM mirror is checked against */
         for (unsigned i = 0; i < RULES_N; i++) printf("rule=%s fix: %s\n", RULES[i].id, RULES[i].fix);
@@ -1388,6 +1632,7 @@ int main(int argc, char **argv) {
     }
 usage:
     fprintf(stderr, "usage: bench status [--line] | run [--n N] [--hold-quota BYTES] [--hold-files N] [script|-]"
-                    " | kill | demo | snap-ls | restore snap-<k> | verify [snap-<k>] | fork snap-<k> <dir> | rules\n");
+                    " | kill | demo | snap-ls | restore snap-<k> | verify [snap-<k>] | fork snap-<k> <dir> | rules"
+                    " | check [--n N] [script|-] | stats [<session>]\n");
     return 2;
 }
