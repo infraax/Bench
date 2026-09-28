@@ -46,7 +46,7 @@ fold into it (behavior coverage kept; each row still runs through the binary):
 
 | Today | Fold into | Saves |
 |---|---|---|
-| `FIXTURES` in the harness (unknown verb, supervisor words…) — 4 rows repeat `OPS_TABLE` rows | drop the 4 duplicate fixture rows; `OPS_TABLE` + `OPS_RULES` already assert verb class **and** rule | 4 worlds (~0.3 s), no coverage lost: same line, same binary, stricter assertion |
+| `FIXTURES` in the harness — **9 of 13** rows run a line that is also an `OPS_TABLE` row (unknown verb, 4 supervisor words, TEST without kind, WRITE main/, path escape, JUDGE with radio off) | drop those rows once their extra columns (lamps, snap count) are checked elsewhere; `OPS_TABLE` + `OPS_RULES` already assert the refusal **and** the rule through the binary | ~9 `bench run`s (~0.5 s); no rule loses its only test |
 | `TestCage` seccomp cases (socket, ptrace, io_uring ×3, x32, mount API ×3) — each its own tool file | one `SYSCALL_TABLE` in the harness: (name, nr, args, expect) run in one world, one step per row | ~9 worlds; one place to read what is killed vs EPERM |
 | `TestRefusals.test_manifest_of_a_refused_step_carries_the_rule` (3 lines) | add a `manifest=True` column to `OPS_RULES` rows that frame | the MANIFEST check covers every runtime refusal, not 3 |
 
